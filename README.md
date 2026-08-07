@@ -106,7 +106,10 @@ you can see across everything you are running.
 
 ![World view](docs/world.png)
 
-A town with a blocked agent raises a `!` above its skyline.
+A town with a blocked agent raises a `!` above its skyline, and the town you
+have selected keeps a frame around its plot. A workspace with nothing built
+yet shows open land rather than a placeholder building, so the map never
+promises a town that the town view then shows as an empty field.
 
 ## The town remembers
 

@@ -20,7 +20,7 @@ function fakeTown() {
     label,
     state,
     floors,
-    workMs: floors * 4 * 60000,
+    workMs: floors * 60 * 60000,
     workers: workers.map((w, i) => ({
       paneId: `w1:p${label.length}${i}`,
       name: w.name,
@@ -59,6 +59,8 @@ function fakeWorld() {
     { ...t, id: 'w2', label: 'fablo', counts: { working: 1, blocked: 0, idle: 2, done: 0, unknown: 0 }, agentCount: 3, buildingList: t.buildingList.slice(1, 4) },
     { ...t, id: 'w3', label: 'herdr plugins', counts: { working: 1, blocked: 0, idle: 0, done: 0, unknown: 0 }, agentCount: 1, buildingList: t.buildingList.slice(1, 2) },
     { ...t, id: 'w4', label: 'quiet', counts: { working: 0, blocked: 0, idle: 1, done: 0, unknown: 0 }, agentCount: 1, buildingList: t.buildingList.slice(4) },
+    // A workspace with nothing built yet: open land, not a placeholder house.
+    { ...t, id: 'w5', label: 'new project', counts: { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 }, agentCount: 0, buildingList: [] },
   ];
 }
 

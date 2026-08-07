@@ -25,7 +25,7 @@ function town() {
     label,
     state,
     floors,
-    workMs: floors * 30 * 60000,
+    workMs: floors * 60 * 60000,
     workers: workers.map((w, i) => ({
       paneId: `w1:p${label.length}${i}`, name: w.name, state: w.state, focused: false, title: label,
     })),
