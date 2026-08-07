@@ -26,7 +26,7 @@ command = ["node", "src/main.js"]
 # same kind of pane the town uses, so the answer actually applies.
 [[panes]]
 id = "probe"
-title = "Mouse Probe"
+title = "Mouse Probe (diagnostic)"
 placement = "tab"
 command = ["node", "tools/mouse-probe.js"]
 
