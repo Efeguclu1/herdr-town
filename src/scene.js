@@ -738,15 +738,29 @@ function drawWorld(cv, towns, opts) {
     cv.set(plotX, plotTop - 5, mix(accent, P.white, 0.4));
     cv.set(plotX + plotW - 1, plotTop - 5, mix(accent, P.white, 0.4));
 
-    const source = town.buildingList.length
-      ? town.buildingList
-      : [{ key: town.id, state: 'unknown', floors: 1 }];
-    const { n, bw } = miniLayout(plotW, source.length);
+    const source = town.buildingList;
+    const { n, bw } = miniLayout(plotW, Math.max(1, source.length));
     const list = source.slice(0, n);
+    let tallestTop = groundY;
+
+    // A town with nothing built shows empty land, not a placeholder house.
+    // Substituting a fake building here meant the world view promised a
+    // building that the town view then correctly refused to show: five towns
+    // with houses, two of which opened onto an empty green field.
+    if (!list.length) {
+      const spacing = 9;
+      const count = Math.max(1, Math.floor((plotW - PLOT_PAD * 2) / spacing));
+      const span = count * spacing - 2;
+      let tx = plotX + Math.max(PLOT_PAD, Math.floor((plotW - span) / 2));
+      for (let k = 0; k < count; k++) {
+        cv.blit(tree, tx, plotTop - 7);
+        tx += spacing;
+      }
+      tallestTop = plotTop - 7;
+    }
 
     const total = list.length * (bw + MINI_GAP) - MINI_GAP;
     let bx = plotX + Math.max(PLOT_PAD, Math.floor((plotW - total) / 2));
-    let tallestTop = groundY;
 
     for (const b of list) {
       const floors = Math.min(4, b.floors);
