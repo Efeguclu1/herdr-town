@@ -85,11 +85,10 @@ only appear while it is bright enough to see them.
 | --- | --- |
 | ![Midday](docs/town-day.png) | ![Golden hour](docs/town-golden.png) |
 
-Press **`t`** to cycle the town through dawn, morning, midday, afternoon,
-golden hour, sunset and night, then back to the real clock. The header says
-`(preview)` while you are not on live time.
-
-You can also pin an hour at launch, but it has to go through `--env`:
+There is no way to change the time from inside the town, deliberately: the
+sky is meant to tell you what time it actually is, and a town you can set to
+midnight stops being informative. For development you can pin an hour, but it
+has to go through `--env`:
 
 ```bash
 herdr plugin pane open --plugin efeguclu.town --entrypoint town \
@@ -162,7 +161,6 @@ browsable with the pointer.
 | `↑` `↓` / `k` `j` | Switch town | — |
 | `enter` | Read the full message | Enter the town |
 | `w` / `tab` | World view | Back to town view |
-| `t` | Cycle time of day (preview) | Cycle time of day |
 | `m` | Release the mouse back to Herdr | Same |
 | `r` | Refresh now | Refresh now |
 | `q` / `esc` | Quit | Quit |
@@ -170,6 +168,31 @@ browsable with the pointer.
 In the reading view: `↑↓`/wheel scroll, `r` reply, `enter` jump to that agent's
 pane, `esc` back to the town, `q` quit. While composing a reply every key
 belongs to the composer, so typing "q" writes a q instead of quitting.
+
+## Terminal size
+
+The town scales to the pane it is given. Terminal size decides how the town is
+*drawn*, never what it contains: the number of buildings comes from your
+agents and their history, and the number of floors comes from recorded working
+time. A small terminal shows fewer buildings at once and you scroll; it does
+not mean the town has fewer.
+
+| terminal | storey | worker | bubble | buildings on screen |
+| --- | --- | --- | --- | --- |
+| 80x24 | 3px | 12px | 25 chars | 4 |
+| 100x30 | 3px | 12px | 32 chars | 5 |
+| 120x40 | 5px | 12px | 38 chars | 6 |
+| 161x50 | 6px | 12px | 46 chars | 8 |
+| 200x60 | 8px | 12px | 46 chars | 10 |
+
+Storey height is derived so that a maxed-out 8-floor tower exactly fills the
+sky below the space reserved for speech bubbles, and sprite scale follows
+storey height so a worker stays about a storey and a half tall at any size.
+Both were once chosen independently, which made floors 5-8 render identically
+on a 161x50 pane and left workers 43% as tall as a full tower.
+
+Below 100x30 there is genuinely not enough sky for eight distinct storeys, so
+floors compress: 80x24 shows 6 of the 8 as distinct heights.
 
 ## Install
 
