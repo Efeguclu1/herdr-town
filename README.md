@@ -122,7 +122,8 @@ agents have worked on is remembered, so the skyline is a record of the project:
   agent does not permanently alter the town.
 
 Buildings grow with the time their agents spend in Herdr's `working` state:
-30 minutes per floor, up to 8. Two agents on the same feature build it twice as
+one hour per floor, up to 8, so a maxed-out tower is seven hours of real work
+on a single feature. Two agents on the same feature build it twice as
 fast. An agent sitting idle at a prompt builds nothing, which is deliberate:
 the skyline should reflect work done, not panes left open.
 

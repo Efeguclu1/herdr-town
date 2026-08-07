@@ -32,9 +32,10 @@ function featureOf(agent) {
 }
 
 // The building's height comes from accumulated working time. Paced so a town
-// develops across days of real use rather than topping out in one sitting:
-// half an hour of agent work per floor, ~4 hours to reach full height.
-const FLOOR_MINUTES = 30;
+// develops over weeks rather than topping out in an afternoon: one hour of
+// agent work per floor, so a maxed-out tower is seven hours of real work on a
+// single feature.
+const FLOOR_MINUTES = 60;
 const MAX_FLOORS = 8;
 
 function floorsFor(ms) {
