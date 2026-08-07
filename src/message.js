@@ -70,6 +70,12 @@ function isChrome(line) {
   if (/new task\?|\/clear to save|to save \d+(\.\d+)?k tokens/i.test(t)) return true;
   if (/^\d+\s+tasks?$/i.test(t)) return true;
 
+  // System notices: a leading glyph plus middot-separated metadata, such as
+  // "▎ Using Opus 5 (from .claude/settings.json) · /model". One middot is
+  // enough here because prose almost never opens with a symbol. List markers
+  // are excluded so a genuine bullet is never mistaken for furniture.
+  if (/^[^\p{L}\p{N}\s\-*+•·>]/u.test(t) && t.includes('·')) return true;
+
   // Status bars: middot-separated metadata like
   // "Cursor Grok 4.5 High Fast · 40.1% · 6 files edited".
   if ((t.match(/·/g) || []).length >= 2 && t.length < 160) return true;

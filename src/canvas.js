@@ -59,7 +59,7 @@ class Canvas {
 
   // Draw a sprite (see sprites.js). `overrides` remaps legend keys to colours
   // at draw time, which is how one worker sprite renders in each agent's colour.
-  blit(sprite, x, y, overrides) {
+  blit(sprite, x, y, overrides, scale = 1) {
     const { w, h, keys, colors } = sprite;
     for (let j = 0; j < h; j++) {
       for (let i = 0; i < w; i++) {
@@ -71,7 +71,14 @@ class Canvas {
           color = overrides[key];
         }
         if (color === undefined || color === null) continue;
-        this.set(x + i, y + j, color);
+        if (scale === 1) { this.set(x + i, y + j, color); continue; }
+        // Chunky upscale: one sprite pixel becomes a scale x scale block, so
+        // the art stays pixel-crisp instead of being interpolated.
+        for (let sy = 0; sy < scale; sy++) {
+          for (let sx = 0; sx < scale; sx++) {
+            this.set(x + i * scale + sx, y + j * scale + sy, color);
+          }
+        }
       }
     }
   }

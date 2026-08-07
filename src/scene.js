@@ -122,22 +122,24 @@ function drawClouds(cv, groundY, frame, sky) {
 
 function drawHills(cv, groundY, sky) {
   const base = groundY;
+  const S = sceneScale(cv.h);
   for (let x = 0; x < cv.w; x++) {
-    const h1 = 5 + Math.round(4 * Math.sin(x / 13) + 2 * Math.sin(x / 5));
+    const h1 = (5 + Math.round(4 * Math.sin(x / 13) + 2 * Math.sin(x / 5))) * S;
     for (let y = base - h1; y < base; y++) cv.set(x, y, sky.hill);
   }
 }
 
 function drawGround(cv, groundY, sky) {
+  const S = sceneScale(cv.h);
   cv.hline(0, groundY, cv.w, sky.ground);
   cv.rect(0, groundY + 1, cv.w, cv.h - groundY - 1, mix(sky.ground, P.black, 0.45));
   // A path running through the town.
-  const roadY = groundY + 4;
+  const roadY = groundY + 4 * S;
   if (roadY < cv.h) {
     const road = mix(P.slate, P.black, 0.15 + sky.darkness * 0.35);
     cv.hline(0, roadY, cv.w, road);
-    cv.hline(0, roadY + 1, cv.w, mix(road, P.black, 0.35));
-    for (let x = 2; x < cv.w; x += 8) cv.set(x, roadY, mix(P.yellow, road, sky.darkness * 0.5));
+    for (let k = 1; k <= S; k++) cv.hline(0, roadY + k, cv.w, mix(road, P.black, 0.35));
+    for (let x = 2; x < cv.w; x += 8 * S) cv.rect(x, roadY, S, 1, mix(P.yellow, road, sky.darkness * 0.5));
   }
 }
 
@@ -149,21 +151,37 @@ function groundLine(cvH) {
   return Math.round(cvH * 0.78);
 }
 
+// On a tall pane the scene's natural height (a 12px worker in front of a
+// short building) leaves most of the frame as dead sky. Drawing everything
+// twice the size fills the frame instead of stretching the emptiness.
+function sceneScale(cvH) {
+  return cvH >= 76 ? 2 : 1;
+}
+
 // Storey height scales with the pane, so a tall terminal gets tall buildings
 // rather than the same short ones under a lot of empty sky.
 function floorH(cvH) {
-  return Math.max(4, Math.round(cvH * 0.06));
+  return Math.max(4, Math.round(cvH * 0.06)) * sceneScale(cvH);
 }
 
 function buildingHeight(floors, fh) {
   return floors * fh + 3;
 }
 
+// A building never grows into the last strip of sky. Without this a maxed-out
+// tower on a tall pane reaches the top of the frame, leaving nowhere to put a
+// speech bubble, so bubbles fall back across the roof and hide the building.
+const BUBBLE_HEADROOM = 16;
+
+function roofY(cv, groundY, floors) {
+  const h = Math.min(buildingHeight(floors, floorH(cv.h)), groundY - BUBBLE_HEADROOM);
+  return { top: groundY - h, h };
+}
+
 function drawBuilding(cv, x, groundY, w, b, frame, sky) {
   const accent = STATE_COLOR[b.state] || P.slate;
   const FLOOR_H = floorH(cv.h);
-  const h = buildingHeight(b.floors, FLOOR_H);
-  const top = groundY - h;
+  const { top, h } = roofY(cv, groundY, b.floors);
 
   const ruin = b.state === 'ruin';
   const complete = b.state === 'complete';
@@ -311,45 +329,46 @@ function poseFor(state, frame, seed) {
 }
 
 function drawWorker(cv, x, groundY, worker, frame, selected, showPlate = true) {
+  const S = sceneScale(cv.h);
   const seed = hash(worker.paneId);
   const pose = poseFor(worker.state, frame, seed);
   const sp = WORKER_POSES[pose];
   const color = agentColor(worker.name);
 
   // A one-pixel bob keeps everyone alive-looking without being distracting.
-  const bob = worker.state === 'working' && pose === 'strike' ? 1 : 0;
-  const top = groundY - sp.h + bob;
+  const bob = (worker.state === 'working' && pose === 'strike' ? 1 : 0) * S;
+  const top = groundY - sp.h * S + bob;
 
   const overrides = { A: color };
   if (worker.state === 'unknown') {
     overrides.A = mix(color, P.black, 0.55);
     overrides.S = mix(P.yellow, P.black, 0.5);
   }
-  cv.blit(sp, x, top, overrides);
+  cv.blit(sp, x, top, overrides, S);
 
   // Shadow.
-  cv.hline(x + 2, groundY, 5, mix(P.green, P.black, 0.7));
+  cv.hline(x + 2 * S, groundY, 5 * S, mix(P.green, P.black, 0.7));
 
   if (worker.state === 'blocked') {
     // Bubble pops in and out so a stalled agent pulses in your periphery.
-    if (Math.floor(frame / 8) % 4 !== 3) cv.blit(bubbleBang, x + 5, top - 8);
+    if (Math.floor(frame / 8) % 4 !== 3) cv.blit(bubbleBang, x + 5 * S, top - 8 * S, null, S);
   } else if (worker.state === 'idle') {
     const drift = Math.floor(frame / 10) % 3;
-    cv.blit(zzz, x + 6, top - 4 - drift);
+    cv.blit(zzz, x + 6 * S, top - (4 + drift) * S, null, S);
   } else if (worker.state === 'working') {
     // Sparks off the hammer on the strike frame.
     if (pose === 'strike') {
       for (let i = 0; i < 3; i++) {
-        const sx = x + 8 + Math.round(Math.sin((frame + i * 3) / 2) * 2);
-        const sy = top + 9 - i;
+        const sx = x + (8 + Math.round(Math.sin((frame + i * 3) / 2) * 2)) * S;
+        const sy = top + (9 - i) * S;
         cv.set(sx, sy, i === 0 ? P.white : P.yellow);
       }
     }
   } else if (worker.state === 'done') {
     // Confetti.
     for (let i = 0; i < 5; i++) {
-      const cx = x + 1 + ((i * 3 + Math.floor(frame / 5)) % 8);
-      const cy = top - 6 + ((i * 5 + Math.floor(frame / 3)) % 10);
+      const cx = x + (1 + ((i * 3 + Math.floor(frame / 5)) % 8)) * S;
+      const cy = top - (6 - ((i * 5 + Math.floor(frame / 3)) % 10)) * S;
       cv.set(cx, cy, [P.cyan, P.yellow, P.lime, P.orange, P.white][i % 5]);
     }
   }
@@ -504,21 +523,23 @@ function drawSpeechBubble(cv, cx, box, lines, opts) {
 
 // ---------------------------------------------------------------- town view
 
-const WORKER_W = 9;
-const WORKER_GAP = 7; // workers overlap slightly so a crowd still fits
+const WORKER_SPRITE_W = 9;
+const WORKER_SPRITE_H = 12;
 
-function lotWidth(building) {
+function lotWidth(building, S) {
   // Standing buildings have no workers to make room for, so they pack tighter
   // and let more of the town's history fit on screen.
-  if (!building.workers.length) return 15;
-  const crowd = WORKER_W + (building.workers.length - 1) * WORKER_GAP;
-  return Math.max(18, crowd + 8);
+  if (!building.workers.length) return 15 * S;
+  const gap = Math.round(WORKER_SPRITE_W * 0.78) * S; // workers overlap a little
+  const crowd = WORKER_SPRITE_W * S + (building.workers.length - 1) * gap;
+  return Math.max(18 * S, crowd + 8 * S);
 }
 
 // Draw one town. Returns the lots actually drawn so the caller can align text
 // labels underneath them.
 function drawTown(cv, town, opts) {
   const { frame, scroll, selected, messageFor } = opts;
+  const S = sceneScale(cv.h);
   const groundY = groundLine(cv.h);
   const sky = opts.sky || daylight.current();
 
@@ -529,13 +550,13 @@ function drawTown(cv, town, opts) {
   const buildings = town.buildingList;
   if (buildings.length === 0) {
     // An empty town still gets scenery, so it reads as "quiet" not "broken".
-    for (let i = 0; i < Math.floor(cv.w / 18); i++) {
-      cv.blit(tree, 6 + i * 18, groundY - 7);
+    for (let i = 0; i < Math.floor(cv.w / (18 * S)); i++) {
+      cv.blit(tree, (6 + i * 18) * S, groundY - 7 * S, null, S);
     }
     return { lots: [], hits: [], scroll: 0 };
   }
 
-  const widths = buildings.map(lotWidth);
+  const widths = buildings.map((b) => lotWidth(b, S));
 
   const margin = 3;
   const avail = cv.w - margin * 2;
@@ -570,14 +591,15 @@ function drawTown(cv, town, opts) {
   for (let i = start; i < start + fit; i++) {
     const b = buildings[i];
     const w = widths[i];
-    const bw = Math.min(w - 4, 22);
+    const bw = Math.min(w - 4 * S, 22 * S);
     const bx = x + Math.floor((w - bw) / 2);
 
     drawBuilding(cv, bx, groundY, bw, b, frame, sky);
 
     // Workers stand in front, spread across the lot.
     const n = b.workers.length;
-    const totalW = WORKER_W + (n - 1) * WORKER_GAP;
+    const gap = Math.round(WORKER_SPRITE_W * 0.78) * S;
+    const totalW = WORKER_SPRITE_W * S + (n - 1) * gap;
     let wx = x + Math.floor((w - totalW) / 2);
     for (let k = 0; k < n; k++) {
       const worker = b.workers[k];
@@ -589,25 +611,28 @@ function drawTown(cv, town, opts) {
       const text = wants ? messageFor(worker.paneId) : '';
       // The bubble's border already carries the agent colour, so a nameplate
       // under it is redundant and gets buried by neighbouring bubbles anyway.
-      drawWorker(cv, wx, groundY + 2, worker, frame, isSel, !(isSel && text));
-      // Sprite is 9x12 with its feet at groundY + 2.
+      drawWorker(cv, wx, groundY + 2 * S, worker, frame, isSel, !(isSel && text));
       hits.push({
-        x: wx, y: groundY + 2 - 12, w: WORKER_W, h: 12, paneId: worker.paneId,
+        x: wx,
+        y: groundY + 2 * S - WORKER_SPRITE_H * S,
+        w: WORKER_SPRITE_W * S,
+        h: WORKER_SPRITE_H * S,
+        paneId: worker.paneId,
       });
 
       if (text) {
         {
           pending.push({
-            cx: wx + 4,
+            cx: wx + Math.floor(WORKER_SPRITE_W * S / 2),
             worker,
             selected: isSel,
             title: worker.name,
-            buildingTop: groundY - buildingHeight(b.floors, floorH(cv.h)),
+            buildingTop: roofY(cv, groundY, b.floors).top,
             text,
           });
         }
       }
-      wx += WORKER_GAP;
+      wx += gap;
     }
 
     lots.push({ x, w, index: i, building: b });
@@ -616,7 +641,7 @@ function drawTown(cv, town, opts) {
 
   // Bubbles last: they float above the whole scene, so nothing occludes them.
   const maxChars = bubbleChars(cv.w);
-  const workerTop = groundY + 2 - 12; // worker sprite is 12px tall
+  const workerTop = groundY + 2 * S - WORKER_SPRITE_H * S;
   for (const p of pending) {
     p.lines = wrapPlain(p.text, maxChars, p.selected ? 4 : 3);
     // Sit above the roof rather than across it: with a single agent the
