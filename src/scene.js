@@ -23,6 +23,10 @@ function hash(...args) {
   return ((h >>> 0) % 100000) / 100000;
 }
 
+// Must match MAX_FLOORS in world.js: the renderer sizes storeys so that many
+// fit, and the model refuses to grow a building past it.
+const MAX_BUILDING_FLOORS = 8;
+
 const STATE_COLOR = {
   working: P.lime,
   blocked: P.red,
@@ -151,19 +155,30 @@ function groundLine(cvH) {
   return Math.round(cvH * 0.78);
 }
 
-// On a tall pane the scene's natural height (a 12px worker in front of a
-// short building) leaves most of the frame as dead sky. Drawing everything
-// twice the size fills the frame instead of stretching the emptiness.
+// Sky kept clear above the tallest building so a speech bubble always has
+// somewhere to go. Proportional, or a short pane loses its whole skyline.
+function bubbleHeadroom(cvH) {
+  return Math.max(8, Math.round(cvH * 0.17));
+}
+
+// Storey height is derived from the space available rather than picked, so a
+// maxed-out tower reaches the top of that space at any pane size. Choosing it
+// independently meant floors 5-8 clamped to the same height on a 161x50 pane:
+// half the progression system was invisible.
+function floorH(cvH) {
+  const available = groundLine(cvH) - bubbleHeadroom(cvH) - 3;
+  return Math.max(3, Math.min(20, Math.floor(available / MAX_BUILDING_FLOORS)));
+}
+
+// Sprite scale follows storey height, which keeps a worker about a storey and
+// a half tall whatever the pane size. Scaling sprites on their own made a
+// worker 43% as tall as a full tower.
 function sceneScale(cvH) {
-  return cvH >= 76 ? 2 : 1;
+  return Math.max(1, Math.min(3, Math.round(floorH(cvH) / 8)));
 }
 
 // Storey height scales with the pane, so a tall terminal gets tall buildings
 // rather than the same short ones under a lot of empty sky.
-function floorH(cvH) {
-  return Math.max(4, Math.round(cvH * 0.06)) * sceneScale(cvH);
-}
-
 function buildingHeight(floors, fh) {
   return floors * fh + 3;
 }
@@ -171,10 +186,8 @@ function buildingHeight(floors, fh) {
 // A building never grows into the last strip of sky. Without this a maxed-out
 // tower on a tall pane reaches the top of the frame, leaving nowhere to put a
 // speech bubble, so bubbles fall back across the roof and hide the building.
-const BUBBLE_HEADROOM = 16;
-
 function roofY(cv, groundY, floors) {
-  const h = Math.min(buildingHeight(floors, floorH(cv.h)), groundY - BUBBLE_HEADROOM);
+  const h = Math.min(buildingHeight(floors, floorH(cv.h)), groundY - bubbleHeadroom(cv.h));
   return { top: groundY - h, h };
 }
 
