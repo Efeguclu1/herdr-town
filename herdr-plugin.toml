@@ -1,0 +1,38 @@
+id = "efeguclu.town"
+name = "Agent Town"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Watch your agents as 8-bit characters building a town. Each project is a town, each feature is a building, each agent is a worker."
+platforms = ["linux", "macos", "windows"]
+
+# Buildings grow with the time agents spend working, so that time has to be
+# recorded whether or not anyone is looking at the town. This runs once when
+# Herdr starts and detaches a background recorder; it is the only writer of
+# build progress.
+[[startup]]
+command = ["node", "bin/recorder.js", "--spawn", "--quiet"]
+
+# The main view lives in its own tab so it survives jumping to an agent —
+# `enter` moves focus to that agent's pane and the town stays open behind it,
+# ready to switch back to. An overlay would be dismissed on focus change.
+# For a one-off peek that closes itself, pass --placement overlay.
+[[panes]]
+id = "town"
+title = "Agent Town"
+placement = "tab"
+command = ["node", "src/main.js"]
+
+# Dev probe: does a plugin pane receive forwarded mouse events? Run it in the
+# same kind of pane the town uses, so the answer actually applies.
+[[panes]]
+id = "probe"
+title = "Mouse Probe"
+placement = "tab"
+command = ["node", "tools/mouse-probe.js"]
+
+# Bindable action, so `prefix+t` (or any key) can summon the town.
+[[actions]]
+id = "open"
+title = "Open Agent Town"
+contexts = ["workspace"]
+command = ["node", "bin/open-town.js"]

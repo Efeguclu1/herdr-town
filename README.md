@@ -1,0 +1,260 @@
+# Agent Town
+
+A [Herdr](https://herdr.dev) plugin that renders your running coding agents as
+an 8-bit town, and lets you read and answer them without leaving it.
+
+![Agent Town at night](docs/town-night.png)
+
+Herdr already knows which agents are `working`, `blocked`, `done` or `idle`
+across every project. Agent Town draws that as a place instead of a list, then
+goes one step further: hover a worker and it tells you what it last said, press
+`enter` to read the whole message, press `r` to answer it.
+
+```bash
+herdr plugin install efeguclu/herdr-town
+herdr plugin pane open --plugin efeguclu.town --entrypoint town
+```
+
+## The idea
+
+| Herdr concept | In the town |
+| --- | --- |
+| Workspace | A **town** |
+| A feature being worked on | A **building** under construction |
+| Agent in a pane | An 8-bit **worker** |
+| `agent_status` | What the worker is doing |
+| Time spent `working` | How many **floors** the building has |
+
+Agents whose panes report the same task title are working on the same feature,
+so they share a building and hammer at it side by side.
+
+| State | Worker | Building |
+| --- | --- | --- |
+| `working` | Swings a hammer, sparks fly | Scaffolding, a swinging crane, flickering windows |
+| `blocked` | Arms up under a pulsing red `!` | Hazard tape across the site, red windows |
+| `done` | Celebrating in confetti | Fully lit, flag on the roof |
+| `idle` | Asleep with floating `z`s | Dark, a couple of windows on |
+
+## Read and answer, without leaving
+
+The point of the town is that it replaces reading terminal scrollback. Hover a
+worker and a speech bubble shows what it last said. Blocked agents always get
+one, because a blocked agent is the reason you looked.
+
+Press `enter` and the town gives way to the full message:
+
+```
+ claude blocked  QR handshake fix                                        w2:pF
+──────────────────────────────────────────────────────────────────────────────
+  I found two ways to fix the handshake.
+
+  1. Patch the client to retry with the old token format. Small, contained,
+     but leaves the shim in place for another release.
+  2. Bump the library to 3.2 and delete the shim entirely. Cleaner, but it
+     touches the reconnect path that the QR flow depends on.
+
+  Which do you want?
+
+ line 1-9 of 34
+ ↑↓/wheel scroll  r reply  enter go to this agent  esc back  q quit
+```
+
+Press `r` and the footer becomes a composer:
+
+```
+ reply to claude › option 2, and add a test for the reconnect path▌
+ enter send  esc cancel  ctrl+u clear
+```
+
+That goes out through `herdr agent prompt`. The agent starts working, its
+building sprouts scaffolding, and you never opened its pane.
+
+## Time of day
+
+The sky runs on your real clock, interpolated between keyframes so dawn creeps
+in and sunset deepens rather than snapping between modes.
+
+![The full day cycle](docs/day-cycle.png)
+
+The sun and moon arc across the sky on the real clock, so the town tells you
+roughly what time it is. Lit windows respond to the light: at midnight a lit
+window glows, at noon it is just glass. Stars fade in as it darkens, and clouds
+only appear while it is bright enough to see them.
+
+| Midday | Golden hour |
+| --- | --- |
+| ![Midday](docs/town-day.png) | ![Golden hour](docs/town-golden.png) |
+
+Force a time to see any phase without waiting for it:
+
+```bash
+HERDR_TOWN_HOUR=19.5 herdr plugin pane open --plugin efeguclu.town --entrypoint town
+```
+
+## Every project at once
+
+Press `w` for the world view: each project as its own town on its own plot, so
+you can see across everything you are running.
+
+![World view](docs/world.png)
+
+A town with a blocked agent raises a `!` above its skyline.
+
+## The town remembers
+
+Towns are not just a view of what is running right now. Every feature its
+agents have worked on is remembered, so the skyline is a record of the project:
+
+- **Finished** features stay standing as completed buildings, warm lit windows
+  and a flag, no workers outside. Kept for 90 days.
+- **Abandoned** features (worked on, never finished) stand as **ruins**:
+  eroded rooflines, dark windows, rubble at the base. Kept for 14 days.
+- Features touched for under a minute leave nothing behind, so glancing at an
+  agent does not permanently alter the town.
+
+Buildings grow with the time their agents spend in Herdr's `working` state:
+30 minutes per floor, up to 8. Two agents on the same feature build it twice as
+fast. An agent sitting idle at a prompt builds nothing, which is deliberate:
+the skyline should reflect work done, not panes left open.
+
+### The recorder
+
+Progress is counted by a small background process, not by the view. If it were
+counted while the town was on screen, buildings would only grow during the
+minutes you happened to be watching.
+
+The plugin's `[[startup]]` hook detaches the recorder when Herdr starts, and
+opening the town starts one if none is running. It polls every 15 seconds,
+holds a heartbeat lock so only one ever runs, and exits once Herdr has been
+gone for about five minutes. It is the only writer of progress; the view opens
+the store read-only.
+
+```bash
+node bin/recorder.js --spawn   # start one by hand
+pgrep -fl bin/recorder.js      # check it is alive
+pkill -f bin/recorder.js       # stop it (buildings stop growing)
+```
+
+## Controls
+
+Herdr forwards mouse reports to plugin panes, including motion, so the town is
+browsable with the pointer.
+
+| Mouse | Does |
+| --- | --- |
+| **hover** a worker | Selects them; their bubble appears as you pass |
+| **click** the selected worker | Opens the full message |
+| **wheel** | Walks the workers; scrolls in the reading view |
+
+| Key | Town view | World view |
+| --- | --- | --- |
+| `←` `→` / `h` `l` | Select a worker | Select a town |
+| `↑` `↓` / `k` `j` | Switch town | — |
+| `enter` | Read the full message | Enter the town |
+| `w` / `tab` | World view | Back to town view |
+| `m` | Release the mouse back to Herdr | Same |
+| `r` | Refresh now | Refresh now |
+| `q` / `esc` | Quit | Quit |
+
+In the reading view: `↑↓`/wheel scroll, `r` reply, `enter` jump to that agent's
+pane, `esc` back to the town, `q` quit. While composing a reply every key
+belongs to the composer, so typing "q" writes a q instead of quitting.
+
+## Install
+
+```bash
+herdr plugin install efeguclu/herdr-town
+```
+
+Or to work on it locally:
+
+```bash
+git clone https://github.com/efeguclu/herdr-town
+herdr plugin link ./herdr-town
+```
+
+No build step and no dependencies, just Node 16+. The town opens as a **tab**
+so it survives jumping to an agent: press `enter` from the reading view and
+focus moves to that agent's pane while the town keeps running behind it.
+
+Bind it to a key in your Herdr config:
+
+```toml
+[[keys.command]]
+key = "prefix+t"
+type = "plugin_action"
+command = "efeguclu.town.open"
+description = "agent town"
+```
+
+Opened from a workspace, it starts on that workspace's town.
+
+## How it works
+
+Herdr has no plugin SDK. The CLI *is* the API, so this polls `herdr agent list`
+and `herdr workspace list` once a second through `HERDR_BIN_PATH` (which works
+over both Unix sockets and Windows named pipes) and animates at ~12fps between
+polls.
+
+Rendering uses the half-block trick: each terminal cell draws `▀` with one
+colour as the foreground and another as the background, giving two square
+pixels per cell and a real pixel-art canvas at 2× the row resolution. Colours
+come from the 16-colour Sweetie-16 palette, which is most of why it reads as
+8-bit rather than as a terminal with colours in it.
+
+Speech bubbles are a pixel frame around **real terminal text**. A canvas column
+is exactly one terminal column, so text composites into the scene at full font
+resolution: readable at sentence length, and one line costs 2 pixel rows
+instead of the 7 a pixel font would need.
+
+Reading an agent's message is deliberately dumb. Claude Code and Cursor paint
+different screens but the same *shape*: `<transcript> RULE <input box> RULE
+<status>`. Finding the trailing cluster of box-drawing rules and cutting there
+handles both with no per-agent parser, which matters because Herdr supports
+15+ agent CLIs.
+
+| Module | Does |
+| --- | --- |
+| `src/canvas.js` | Pixel canvas, text cells, ANSI renderer |
+| `src/scene.js` | Sky, buildings, workers, bubbles, layout |
+| `src/daylight.js` | Day cycle: keyframed sky, sun and moon arcs |
+| `src/message.js` | Reading agent screens and stripping chrome |
+| `src/world.js` | Herdr snapshot to towns, buildings, workers |
+| `src/store.js` | Persistent build progress and town history |
+| `src/mouse.js` | SGR mouse reports |
+| `src/font.js` | 3x5 bitmap font for in-world labels |
+
+Dev tools, not part of the runtime:
+
+```bash
+node tools/preview.js out.png town 6 0 19   # render a scene to a PNG at 19:00
+node tools/daysheet.js out.png              # the whole day as one contact sheet
+node tools/message-test.js                  # what the extractor pulls from every agent
+node tools/mouse-probe.js                   # does this terminal forward mouse events
+```
+
+Screenshots are rendered by `tools/preview.js`, which approximates in-bubble
+text with the bundled 3x5 font. In a real terminal that text is drawn in your
+own font, so it looks sharper and keeps its lower case.
+
+## Known limitations
+
+- **Tested against Claude Code and Cursor.** The message extractor scores 10/10
+  on those. Codex, Droid, Copilot and the other agents Herdr supports are
+  unverified; the structural heuristic should hold, but that is a prediction.
+- **Sized for wide terminals.** Everything scales off canvas width. Below about
+  100 columns bubbles get cramped.
+- **Sunrise and sunset are fixed** at 06:12 and 19:36 year-round rather than
+  computed from your latitude and date.
+- Built and tested against **Herdr 0.7.5**.
+
+Pane graphics (`pane.graphics.*`) could render true images instead of
+half-blocks, but they are experimental and require
+`[experimental].kitty_graphics = true`, so this sticks to half-blocks and works
+everywhere. Herdr's `pane.agent_status_changed` event is scoped to one pane, so
+a view spanning every workspace polls rather than subscribing; the animation
+loop needs to tick regardless.
+
+## Licence
+
+MIT

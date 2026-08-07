@@ -1,0 +1,15 @@
+{
+  "name": "herdr-town",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Watch your Herdr agents as 8-bit characters building a town",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "frame": "node src/main.js --once",
+    "preview": "node tools/preview.js preview.png town 6 0"
+  }
+}

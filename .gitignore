@@ -1,0 +1,10 @@
+node_modules/
+*.log
+
+# Scratch renders from the dev preview tools. The committed screenshots live
+# in docs/ and are regenerated deliberately, not on every run.
+/preview.png
+/daysheet.png
+/out.png
+*.tmp
+.DS_Store
