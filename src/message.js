@@ -56,6 +56,10 @@ function isChrome(line) {
     && (/\(\d+\s*[msh]/.test(t) || /\b\d+\s*[smh]\b/.test(t)
       || /\d+(\.\d+)?k?\s*tokens/i.test(t))) return true;
 
+  // A bare elapsed-time counter on its own line: "(4s)", "2m 25s", "(1m 3s)".
+  // Nothing but furniture ever looks like this, and it leaks into bubbles.
+  if (/^\(?\d+\s*[smh](\s*\d+\s*[smh])?\)?$/.test(t)) return true;
+
   // Token/interrupt counters anywhere on the line.
   if (/[↓↑]\s*[\d.]+k?\s*tokens/i.test(t)) return true;
   if (/\besc to interrupt\b/i.test(t)) return true;
