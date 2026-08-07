@@ -3,7 +3,7 @@
 A [Herdr](https://herdr.dev) plugin that renders your running coding agents as
 an 8-bit town, and lets you read and answer them without leaving it.
 
-![Agent Town at night](docs/town-night.png)
+![Agent Town](docs/town-dawn.png)
 
 Herdr already knows which agents are `working`, `blocked`, `done` or `idle`
 across every project. Agent Town draws that as a place instead of a list, then
@@ -61,10 +61,7 @@ Press `enter` and the town gives way to the full message:
 
 Press `r` and the footer becomes a composer:
 
-```
- reply to claude › option 2, and add a test for the reconnect path▌
- enter send  esc cancel  ctrl+u clear
-```
+![Reading an agent and replying to it](docs/reply.png)
 
 That goes out through `herdr agent prompt`. The agent starts working, its
 building sprouts scaffolding, and you never opened its pane.
@@ -81,9 +78,9 @@ roughly what time it is. Lit windows respond to the light: at midnight a lit
 window glows, at noon it is just glass. Stars fade in as it darkens, and clouds
 only appear while it is bright enough to see them.
 
-| Midday | Golden hour |
+| Afternoon | Night |
 | --- | --- |
-| ![Midday](docs/town-day.png) | ![Golden hour](docs/town-golden.png) |
+| ![Afternoon](docs/town-day.png) | ![Night](docs/town-night.png) |
 
 There is no way to change the time from inside the town, deliberately: the
 sky is meant to tell you what time it actually is, and a town you can set to
@@ -270,9 +267,14 @@ node tools/message-test.js                  # what the extractor pulls from ever
 node tools/mouse-probe.js                   # does this terminal forward mouse events
 ```
 
-Screenshots are rendered by `tools/preview.js`, which approximates in-bubble
-text with the bundled 3x5 font. In a real terminal that text is drawn in your
-own font, so it looks sharper and keeps its lower case.
+Screenshots are real terminal captures. The day-cycle contact sheet is the one
+exception: twelve hours cannot be photographed in one sitting, so it is
+rendered by `tools/daysheet.js`, which approximates in-bubble text with the
+bundled 3x5 font.
+
+The captures predate a round of sizing work, so towns in them sit lower in the
+frame and workers are larger relative to buildings than they now render. The
+behaviour they show is otherwise current.
 
 ## Testing against your agent
 
