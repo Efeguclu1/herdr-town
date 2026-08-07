@@ -11,7 +11,7 @@ goes one step further: hover a worker and it tells you what it last said, press
 `enter` to read the whole message, press `r` to answer it.
 
 ```bash
-herdr plugin install efeguclu/herdr-town
+herdr plugin install Efeguclu1/herdr-town
 herdr plugin pane open --plugin efeguclu.town --entrypoint town
 ```
 
@@ -163,13 +163,13 @@ belongs to the composer, so typing "q" writes a q instead of quitting.
 ## Install
 
 ```bash
-herdr plugin install efeguclu/herdr-town
+herdr plugin install Efeguclu1/herdr-town
 ```
 
 Or to work on it locally:
 
 ```bash
-git clone https://github.com/efeguclu/herdr-town
+git clone https://github.com/Efeguclu1/herdr-town
 herdr plugin link ./herdr-town
 ```
 
