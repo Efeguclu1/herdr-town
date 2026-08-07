@@ -1,0 +1,10 @@
+Analyzing the migration script.
+
+  The `users` table has a unique index on `email` that the new schema drops.
+  Rows 4102 and 8871 would collide once it is gone.
+
+  Should I dedupe those rows first, or keep the index and change the new schema?
+
+> 
+  esc to cancel · ctrl+e to explain · enter to send
+  gpt-5 · 12,400 tokens · ~/repo

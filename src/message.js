@@ -99,12 +99,43 @@ function splitAtInputBox(lines) {
   return { transcript: lines.slice(0, cut), cut };
 }
 
+// A keyboard hint bar: "esc to cancel · ctrl+e to explain · enter to send".
+// Two or more key names, short, and not asking anything.
+//
+// Only ever applied to the last few lines. An approval prompt such as
+// "Run this command? yes (y) / no (n)" looks similar but is the very thing
+// you need to read, and it sits above the input box rather than below it.
+const KEY_HINT = /(?:\besc\b|\benter\b|\btab\b|\bspace\b|ctrl\+\w|alt\+\w|shift\+\w|\((?:y|n)\))/gi;
+
+function isHintBar(line) {
+  const t = line.trim();
+  if (!t || t.length > 90 || t.includes('?')) return false;
+  const hits = t.match(KEY_HINT);
+  return !!hits && hits.length >= 2;
+}
+
 // Turn a raw screen into the last thing the agent said.
 // Deliberately dumb: no per-agent parsing, no attempt to identify speakers.
 // It removes what is provably furniture and lets your eyes do the rest.
 function extract(raw, { maxLines = 40 } = {}) {
   const all = stripAnsi(raw).replace(/\r/g, '').split('\n');
-  const { transcript } = splitAtInputBox(all);
+  const split = splitAtInputBox(all);
+  let { transcript } = split;
+
+  // Agents that bracket their input with box-drawing rules (Claude Code,
+  // Cursor) are handled by the split above. Agents that just print a bare
+  // prompt leave their status and hint bars in the transcript, so trim any
+  // trailing furniture directly.
+  if (split.cut >= all.length) {
+    let end = transcript.length;
+    for (let i = transcript.length - 1, checked = 0; i >= 0 && checked < 6; i--, checked++) {
+      const line = transcript[i];
+      if (!line.trim()) { end = i; continue; }
+      if (isChrome(line) || isHintBar(line)) { end = i; checked = 0; continue; }
+      break;
+    }
+    transcript = transcript.slice(0, end);
+  }
 
   const kept = [];
   for (const line of transcript) {
@@ -267,5 +298,6 @@ class MessageCache {
 }
 
 module.exports = {
-  MessageCache, extract, summarize, isRule, isChrome, splitAtInputBox, stripAnsi,
+  MessageCache, extract, summarize, isRule, isChrome, isHintBar,
+  splitAtInputBox, stripAnsi,
 };

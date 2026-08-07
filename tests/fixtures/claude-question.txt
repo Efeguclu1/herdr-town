@@ -1,0 +1,23 @@
+  I looked at how the reconnect path handles an expired token and there are two
+  workable fixes.
+
+⏺ Read(src/transport/handshake.ts)
+  ⎿ Read 84 lines
+
+  1. Patch the client to retry once with the legacy token format. Small and
+     contained, but it leaves the compatibility shim in place for another release.
+  2. Bump the library to 3.2 and delete the shim entirely. Cleaner, but it touches
+     the reconnect path that the QR flow depends on.
+
+  I lean towards the second, with a regression test on reconnect. Which do you
+  want?
+
+✳ Synthesizing… (2m 25s · ↓ 3.3k tokens · esc to interrupt)
+
+※ recap: Reviewed the handshake expiry bug and proposed two fixes. Next: pick one
+  and add a reconnect regression test. (disable recaps in /config)
+────────────────────────────────────────────────────────────────────────────────────────────────
+❯ exit
+────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on                                    ? for shortcuts
+                                        new task? /clear to save 42.1k tokens

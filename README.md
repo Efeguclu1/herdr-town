@@ -237,11 +237,35 @@ Screenshots are rendered by `tools/preview.js`, which approximates in-bubble
 text with the bundled 3x5 font. In a real terminal that text is drawn in your
 own font, so it looks sharper and keeps its lower case.
 
+## Testing against your agent
+
+Herdr supports 19 agent CLIs. This repo has fixtures for the shapes its author
+could actually capture, so if the town shows nonsense for your agent, the fix
+starts with a capture:
+
+```bash
+npm test                                    # run the extractor over every fixture
+node tools/capture.js w2:pF codex-blocked   # save your agent's screen as a fixture
+```
+
+A fixture is raw `herdr agent read --source visible` output. The extractor has
+no per-agent branches, so every fixture is checked by the same rules: a message
+comes out, no box rules or prompt lines or token counters survive, and the
+teaser a bubble would show contains real words rather than furniture.
+
+**Check a capture for anything private before attaching it** — it is a verbatim
+snapshot of what that agent had on screen. The fixtures in this repo carry real
+chrome with invented content for that reason.
+
+Sending a capture is the single most useful contribution: it turns an untested
+agent into a tested one.
+
 ## Known limitations
 
-- **Tested against Claude Code and Cursor.** The message extractor scores 10/10
-  on those. Codex, Droid, Copilot and the other agents Herdr supports are
-  unverified; the structural heuristic should hold, but that is a prediction.
+- **Verified against Claude Code and Cursor.** Those are the agents the author
+  runs. The extractor is structural rather than per-agent, and there is a
+  fixture covering agents that draw no input box at all, but the other 16 CLIs
+  Herdr supports are untested. See above for how to fix that in one command.
 - **Sized for wide terminals.** Everything scales off canvas width. Below about
   100 columns bubbles get cramped.
 - **Sunrise and sunset are fixed** at 06:12 and 19:36 year-round rather than

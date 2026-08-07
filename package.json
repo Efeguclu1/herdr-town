@@ -10,6 +10,8 @@
   "scripts": {
     "start": "node src/main.js",
     "frame": "node src/main.js --once",
-    "preview": "node tools/preview.js preview.png town 6 0"
+    "preview": "node tools/preview.js preview.png town 6 0",
+    "test": "node tests/extract.test.js",
+    "capture": "node tools/capture.js"
   }
 }

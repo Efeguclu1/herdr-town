@@ -1,0 +1,20 @@
+  The dev server holds port 8787 even after the tab closes. Two ways to clear it:
+
+  lsof -tiTCP:8787 -sTCP:LISTEN | xargs kill
+
+  Or force it if it will not die:
+
+  lsof -tiTCP:8787 -sTCP:LISTEN | xargs kill -9
+
+  Background jobs started from chat die the same way: close that terminal tab, or
+  use the lsof command above.
+
+  Do you want me to add a predev script that frees the port automatically?
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Add a follow-up
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  1 task
+  Sample Model Fast · 40.1% · 6 files edited                                 Run Everything
+  ~/demo-project · feature-branch
