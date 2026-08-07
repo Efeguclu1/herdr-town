@@ -10,6 +10,12 @@ const { ensureRecorder } = require('./ensure-recorder');
 const { MessageCache } = require('./message');
 const mouse = require('./mouse');
 const daylight = require('./daylight');
+
+// Hours worth previewing, in the order `t` steps through them. null is the
+// real clock. Herdr's server spawns plugin panes, so a shell env var never
+// reaches this process; cycling in-app is the only ergonomic way to look at
+// another time (and the only sane way to take screenshots).
+const PREVIEW_HOURS = [null, 6.4, 8.5, 12.5, 16, 19.2, 20.5, 22.5];
 const { StringDecoder } = require('node:string_decoder');
 
 const HEADER_ROWS = 1;
@@ -142,6 +148,7 @@ class App {
     // an undefined scroll turns the slice bounds into NaN and renders nothing.
     this.readPaneId = null;
     this.readScroll = 0;
+    this.previewIndex = 0; // index into PREVIEW_HOURS; 0 = live
     // Worker rectangles from the last rendered frame, in canvas pixels.
     this.hitRects = [];
     this.mouseEnabled = true;
@@ -298,7 +305,8 @@ class App {
     const canvasRows = rows - CHROME_ROWS;
     const cv = new Canvas(cols, canvasRows * 2, P.black);
     // One sky per frame, shared by every draw call and the header.
-    this.sky = daylight.current();
+    const forced = PREVIEW_HOURS[this.previewIndex];
+    this.sky = forced === null ? daylight.current() : daylight.skyAt(forced);
 
     let labelRow;
     if (this.mode === 'world') {
@@ -433,7 +441,7 @@ class App {
 
     if (!t) return pad(`${fg(P.grey)} no workspaces${RESET}`, cols);
     const c = t.counts;
-    const phase = this.sky ? this.sky.label : '';
+    const phase = this.sky ? this.sky.label + (this.previewIndex ? ' (preview)' : '') : '';
     const counts = `${t.agentCount} agent${t.agentCount === 1 ? '' : 's'} · ${t.buildingList.length} building${t.buildingList.length === 1 ? '' : 's'}${phase ? ` · ${phase}` : ''}`;
     const leftPlain = `TOWN OF ${t.label.toUpperCase()}  ${counts}`;
     const left = `${fg(P.yellow)}${BOLD}TOWN OF ${t.label.toUpperCase()}${RESET}  ${fg(P.grey)}${counts}${RESET}`;
@@ -533,7 +541,7 @@ class App {
 
     const keys = this.mode === 'world'
       ? [['←→', 'town'], ['enter', 'visit'], ['w', 'town view'], ['q', 'quit']]
-      : [['←→/hover', 'agent'], ['↑↓', 'town'], ['enter/click', 'read'], ['w', 'world'], ['q', 'quit']];
+      : [['←→/hover', 'agent'], ['↑↓', 'town'], ['enter/click', 'read'], ['w', 'world'], ['t', 'time'], ['q', 'quit']];
     const line2 = ' ' + keys
       .map(([k, d]) => `${fg(P.white)}${k}${RESET}${fg(P.slate)} ${d}${RESET}`)
       .join(`${fg(P.dark)}  ${RESET}`);
@@ -648,6 +656,14 @@ class App {
     if (s === 'r') {
       this.lastPoll = 0;
       this.setStatus('refreshing…', 800);
+      return;
+    }
+    if (s === 't') {
+      this.previewIndex = (this.previewIndex + 1) % PREVIEW_HOURS.length;
+      const h = PREVIEW_HOURS[this.previewIndex];
+      this.setStatus(h === null
+        ? 'time: live'
+        : `time: ${daylight.describe(h)} (preview, press t to cycle)`);
       return;
     }
     if (s === 'm') {

@@ -85,11 +85,20 @@ only appear while it is bright enough to see them.
 | --- | --- |
 | ![Midday](docs/town-day.png) | ![Golden hour](docs/town-golden.png) |
 
-Force a time to see any phase without waiting for it:
+Press **`t`** to cycle the town through dawn, morning, midday, afternoon,
+golden hour, sunset and night, then back to the real clock. The header says
+`(preview)` while you are not on live time.
+
+You can also pin an hour at launch, but it has to go through `--env`:
 
 ```bash
-HERDR_TOWN_HOUR=19.5 herdr plugin pane open --plugin efeguclu.town --entrypoint town
+herdr plugin pane open --plugin efeguclu.town --entrypoint town \
+  --env HERDR_TOWN_HOUR=19.5
 ```
+
+Herdr's server spawns plugin panes, so `HERDR_TOWN_HOUR=19.5 herdr plugin
+pane open ...` does **not** work: the variable is set on the client, which
+only sends a socket request, and never reaches the launched process.
 
 ## Every project at once
 
@@ -152,6 +161,7 @@ browsable with the pointer.
 | `↑` `↓` / `k` `j` | Switch town | — |
 | `enter` | Read the full message | Enter the town |
 | `w` / `tab` | World view | Back to town view |
+| `t` | Cycle time of day (preview) | Cycle time of day |
 | `m` | Release the mouse back to Herdr | Same |
 | `r` | Refresh now | Refresh now |
 | `q` / `esc` | Quit | Quit |
