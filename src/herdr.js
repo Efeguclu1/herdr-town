@@ -41,6 +41,31 @@ function focusAgent(paneId) {
   return call(['agent', 'focus', paneId]);
 }
 
+// Send raw keypresses. This is how a multiple-choice prompt gets answered:
+// it is a modal menu, not a text box, so `prompt` would type into nothing.
+function sendKeys(paneId, ...keys) {
+  return call(['agent', 'send-keys', paneId, ...keys], 10000);
+}
+
+// Read an agent's screen right now, bypassing the view's cache. Used to
+// re-verify a prompt immediately before answering it.
+//
+// `agent read --format text` prints the screen, not JSON, so this cannot go
+// through call(): that would try to parse a terminal dump as a response.
+function readNow(paneId) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      BIN,
+      ['agent', 'read', paneId, '--source', 'visible', '--format', 'text'],
+      { timeout: 6000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err && !stdout) return reject(new Error(stderr || err.message));
+        resolve(String(stdout));
+      },
+    );
+  });
+}
+
 // Send a prompt to an agent. execFile passes argv directly with no shell, so
 // the text needs no escaping however it is typed.
 function promptAgent(paneId, text) {
@@ -55,5 +80,6 @@ async function snapshot() {
 }
 
 module.exports = {
-  call, snapshot, listAgents, listWorkspaces, focusAgent, promptAgent, BIN,
+  call, snapshot, listAgents, listWorkspaces, focusAgent, promptAgent,
+  sendKeys, readNow, BIN,
 };

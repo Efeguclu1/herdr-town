@@ -3,7 +3,10 @@
 const { Canvas } = require('./canvas');
 const { P, agentColor, mix } = require('./palette');
 const { drawTown, drawWorld, STATE_COLOR } = require('./scene');
-const { snapshot, focusAgent, promptAgent } = require('./herdr');
+const {
+  snapshot, focusAgent, promptAgent, sendKeys, readNow,
+} = require('./herdr');
+const { parseChoices } = require('./choices');
 const { Store } = require('./store');
 const { buildWorld, addGhosts, FLOOR_MINUTES, MAX_FLOORS } = require('./world');
 const { ensureRecorder } = require('./ensure-recorder');
@@ -150,6 +153,11 @@ class App {
     this.replyMode = false;
     this.replyText = '';
     this.replySending = false;
+    // Parsed multiple-choice prompt for the pane being read, memoised on the
+    // cache entry's timestamp so it is not re-parsed every frame.
+    this.choices = null;
+    this.choicesFor = null;
+    this.answering = false;
     // Herdr injects the launching workspace, so opening the view from a
     // project drops you in that project's town rather than the first one.
     this.selectedTownId = process.env.HERDR_WORKSPACE_ID || null;
@@ -293,6 +301,51 @@ class App {
     }
   }
 
+  // A prompt is only offered when Herdr says the agent is blocked. Herdr's
+  // detection is manifest-driven and field-tested across 19 agents; this only
+  // decides what the options are, never whether a prompt exists.
+  updateChoices(entry, worker) {
+    const stamp = entry ? `${worker.paneId}:${entry.at}` : null;
+    if (stamp === this.choicesFor) return;
+    this.choicesFor = stamp;
+    this.choices = (entry && entry.raw && worker.state === 'blocked')
+      ? parseChoices(entry.raw)
+      : null;
+  }
+
+  // Answer a prompt by sending the key the agent printed beside that option.
+  //
+  // The screen is re-read first and the parse compared against what was on
+  // display. A cached screen can be seconds old, and sending a keystroke into
+  // a prompt that has already moved on is how you approve something nobody
+  // chose. If anything has shifted, refuse and say so.
+  async answerChoice(index) {
+    const paneId = this.readPaneId;
+    const shown = this.choices;
+    if (!shown || !shown.options[index] || this.answering || !paneId) return;
+    const option = shown.options[index];
+
+    this.answering = true;
+    this.setStatus(`checking the prompt before sending "${option.key}"…`, 4000);
+    try {
+      const fresh = parseChoices(await readNow(paneId));
+      if (!fresh || fresh.signature !== shown.signature) {
+        this.setStatus('prompt changed since it was shown — nothing sent', 5000);
+        return;
+      }
+      await sendKeys(paneId, option.key);
+      this.setStatus(`sent "${option.key}" · ${option.label.slice(0, 44)}`, 4000);
+      this.messages.entries.delete(paneId);
+      this.choicesFor = null;
+      this.choices = null;
+    } catch (e) {
+      const raw = (e.message || '').split('\n')[0];
+      this.setStatus(`could not answer: ${/^Command failed/.test(raw) ? 'agent refused the key' : raw}`, 5000);
+    } finally {
+      this.answering = false;
+    }
+  }
+
   render(cols, rows) {
     if (this.mode === 'read') return this.renderRead(cols, rows);
 
@@ -349,8 +402,12 @@ class App {
 
     const w = e.worker;
     const msg = this.messages.get(w.paneId);
+    this.updateChoices(msg, w);
+    const choices = this.choices;
     const inner = Math.max(20, cols - 4);
-    const bodyRows = Math.max(3, rows - 4);
+    // Answerable options take the bottom of the panel, above the key hints.
+    const choiceRows = choices ? choices.options.length + 2 : 0;
+    const bodyRows = Math.max(3, rows - 4 - choiceRows);
 
     let body = [];
     if (msg && msg.lines && msg.lines.length) {
@@ -384,6 +441,18 @@ class App {
     }
     for (let i = view.length; i < bodyRows; i++) lines.push('');
 
+    // A multiple-choice prompt, answerable in place. Each row shows the key
+    // the agent printed, so what will be sent is never a surprise.
+    if (choices) {
+      lines.push(` ${fg(P.dark)}${'─'.repeat(Math.max(0, cols - 2))}${RESET}`);
+      choices.options.forEach((o, i) => {
+        const num = i + 1;
+        const sends = `${fg(P.dark)}sends ${fg(P.lime)}${o.key}${RESET}`;
+        const label = truncate(o.label, Math.max(12, cols - 26));
+        lines.push(` ${fg(P.white)}${BOLD}[${num}]${RESET} ${fg(P.white)}${label}${RESET}  ${sends}`);
+      });
+    }
+
     if (this.replyMode) {
       // Composer takes both footer rows: the prompt, and what it will do.
       const label = `reply to ${w.name} › `;
@@ -406,7 +475,9 @@ class App {
       const status = this.status && Date.now() < this.statusUntil
         ? `   ${fg(P.cyan)}${truncate(this.status, Math.max(10, cols - 30))}${RESET}`
         : '';
-      const keys = [['↑↓/wheel', 'scroll'], ['r', 'reply'], ['enter', 'go to this agent'], ['esc', 'back'], ['q', 'quit']];
+      const keys = choices
+        ? [[`1-${choices.options.length}`, 'answer'], ['r', 'reply'], ['enter', 'go to this agent'], ['esc', 'back'], ['q', 'quit']]
+        : [['↑↓/wheel', 'scroll'], ['r', 'reply'], ['enter', 'go to this agent'], ['esc', 'back'], ['q', 'quit']];
       const keyText = keys
         .map(([k, d]) => `${fg(P.white)}${k}${RESET}${fg(P.slate)} ${d}${RESET}`)
         .join(`${fg(P.dark)}  ${RESET}`);
@@ -629,7 +700,9 @@ class App {
       else if (down) this.readScroll += 1;
       else if (s === '\x1b[5~') this.readScroll -= 10;
       else if (s === '\x1b[6~' || s === ' ') this.readScroll += 10;
-      else if (s === 'r') { this.replyMode = true; this.replyText = ''; }
+      else if (this.choices && /^[1-9]$/.test(s)) {
+        this.answerChoice(Number(s) - 1);
+      } else if (s === 'r') { this.replyMode = true; this.replyText = ''; }
       else if (left) this.mode = 'town';
       else if (s === '\r' || s === '\n') {
         const e = this.selectionList().find((x) => x.paneId === this.readPaneId);

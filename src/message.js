@@ -256,7 +256,9 @@ class MessageCache {
     if (e && e.fetching) return;
     if (this.inflight >= MAX_INFLIGHT) return;
 
-    const entry = e || { lines: [], text: '', summary: '', detail: '', at: 0, error: null };
+    const entry = e || {
+      lines: [], text: '', summary: '', detail: '', raw: '', at: 0, error: null,
+    };
     entry.fetching = true;
     this.entries.set(paneId, entry);
     this.inflight++;
@@ -264,6 +266,9 @@ class MessageCache {
     readPane(paneId)
       .then((raw) => {
         const { lines, text, empty } = extract(raw);
+        // Choice prompts are parsed from the raw screen, not from `lines`:
+        // extract() strips "❯ 1. Yes" as an input-prompt line.
+        entry.raw = String(raw).slice(-8000);
         entry.lines = lines;
         entry.text = text;
         entry.summary = summarize(lines);
@@ -277,6 +282,7 @@ class MessageCache {
         entry.text = '';
         entry.summary = '';
         entry.detail = '';
+        entry.raw = '';
         entry.error = err.message.split('\n')[0].slice(0, 120);
       })
       .finally(() => {
