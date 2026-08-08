@@ -42,7 +42,7 @@ floor because a worker has to read against a midnight sky as well as a noon one.
 | `done` | Celebrating in confetti | Fully lit, flag on the roof |
 | `idle` | Asleep with floating `z`s | Dark, a couple of windows on |
 
-## Read and answer, without leaving
+## Read, reply, and relay
 
 The point of the town is that it replaces reading terminal scrollback. Hover a
 worker and a speech bubble shows what it last said. Blocked agents always get
@@ -73,10 +73,29 @@ Press `r` and the footer becomes a composer:
 That goes out through `herdr agent prompt`. The agent starts working, its
 building sprouts scaffolding, and you never opened its pane.
 
-Press `t` instead to let agents talk across panes. Pick any other live worker
-from any town, write the message, and Agent Town delivers it through
-`herdr agent prompt` with an envelope naming the source agent and pane. The
-recipient can distinguish relayed agent context from an ordinary human prompt.
+### Agent-to-agent relay
+
+Press `t` from the reading view to pass context from the worker you are reading
+to another live agent:
+
+1. Read the source worker with `enter`.
+2. Press `t` and choose a recipient with `↑` or `↓`. The list includes every
+   live agent in every town, not just the current workspace.
+3. Press `enter`, write the message, then press `enter` again to send it.
+
+Agent Town pins the chosen pane while you type, so a background refresh cannot
+silently redirect the message to a different worker. The recipient receives a
+normal Herdr prompt with a small, explicit envelope:
+
+```text
+[Herdr Town message from claude (w2:pF)]
+Please review the reconnect-path changes and report any race conditions.
+```
+
+This is an intentional relay, similar to sending input between tmux panes. It
+does not start an unbounded autonomous conversation: you choose the source,
+recipient, and message each time. The envelope makes relayed context distinct
+from an ordinary human prompt and gives the recipient a pane ID to reference.
 
 ## Time of day
 
@@ -165,7 +184,7 @@ browsable with the pointer.
 | --- | --- |
 | **hover** a worker | Selects them; their bubble appears as you pass |
 | **click** the selected worker | Opens the full message |
-| **wheel** | Walks the workers; scrolls in the reading view |
+| **wheel** | Walks workers, scrolls messages, or chooses a relay recipient |
 
 | Key | Town view | World view |
 | --- | --- | --- |
@@ -177,9 +196,20 @@ browsable with the pointer.
 | `r` | Refresh now | Refresh now |
 | `q` / `esc` | Quit | Quit |
 
-In the reading view: `↑↓`/wheel scroll, `r` reply, `t` talk to another agent,
-`enter` jump to that agent's pane, `esc` back to the town, `q` quit. While composing a reply every key
-belongs to the composer, so typing "q" writes a q instead of quitting.
+### Reading and relay controls
+
+| Key | Reading view | Relay recipient list | Composer |
+| --- | --- | --- | --- |
+| `↑` `↓` / wheel | Scroll message | Choose recipient | — |
+| `r` | Reply to this agent | — | — |
+| `t` | Start an agent relay | — | — |
+| `enter` | Jump to this agent | Write to selected agent | Send |
+| `ctrl+u` | — | — | Clear text |
+| `esc` | Back to town | Back to message | Cancel |
+| `q` | Quit | Back to message | Type `q` |
+
+While composing, printable keys belong to the message, so typing `q` writes a
+`q` instead of quitting.
 
 ## Terminal size
 
