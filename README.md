@@ -8,7 +8,8 @@ an 8-bit town, and lets you read and answer them without leaving it.
 Herdr already knows which agents are `working`, `blocked`, `done` or `idle`
 across every project. Agent Town draws that as a place instead of a list, then
 goes one step further: hover a worker and it tells you what it last said, press
-`enter` to read the whole message, press `r` to answer it.
+`enter` to read the whole message, press `r` to answer it, or press `t` to
+relay a message from that worker to another agent.
 
 ```bash
 herdr plugin install Efeguclu1/herdr-town
@@ -27,6 +28,12 @@ herdr plugin pane open --plugin efeguclu.town --entrypoint town
 
 Agents whose panes report the same task title are working on the same feature,
 so they share a building and hammer at it side by side.
+
+Every agent CLI gets its own colour, spread around the hue circle rather than
+picked ad hoc, so two workers are never the same shade. All 19 agents Herdr
+ships detection for are covered, plus aliases; anything unrecognised draws from
+a reserve kept clear of the assigned colours. Values stay above a brightness
+floor because a worker has to read against a midnight sky as well as a noon one.
 
 | State | Worker | Building |
 | --- | --- | --- |
@@ -65,6 +72,11 @@ Press `r` and the footer becomes a composer:
 
 That goes out through `herdr agent prompt`. The agent starts working, its
 building sprouts scaffolding, and you never opened its pane.
+
+Press `t` instead to let agents talk across panes. Pick any other live worker
+from any town, write the message, and Agent Town delivers it through
+`herdr agent prompt` with an envelope naming the source agent and pane. The
+recipient can distinguish relayed agent context from an ordinary human prompt.
 
 ## Time of day
 
@@ -165,8 +177,8 @@ browsable with the pointer.
 | `r` | Refresh now | Refresh now |
 | `q` / `esc` | Quit | Quit |
 
-In the reading view: `↑↓`/wheel scroll, `r` reply, `enter` jump to that agent's
-pane, `esc` back to the town, `q` quit. While composing a reply every key
+In the reading view: `↑↓`/wheel scroll, `r` reply, `t` talk to another agent,
+`enter` jump to that agent's pane, `esc` back to the town, `q` quit. While composing a reply every key
 belongs to the composer, so typing "q" writes a q instead of quitting.
 
 ## Terminal size

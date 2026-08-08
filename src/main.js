@@ -153,6 +153,14 @@ class App {
     this.replyMode = false;
     this.replyText = '';
     this.replySending = false;
+    // Agent-to-agent relay. The worker being read is the sender; `t` opens a
+    // cross-town recipient picker, then a dedicated composer. Herdr delivers
+    // the resulting envelope straight to the recipient pane.
+    this.relayRecipientIndex = 0;
+    this.relayRecipientPaneId = null;
+    this.relayCompose = false;
+    this.relayText = '';
+    this.relaySending = false;
     // Parsed multiple-choice prompt for the pane being read, memoised on the
     // cache entry's timestamp so it is not re-parsed every frame.
     this.choices = null;
@@ -181,6 +189,25 @@ class App {
       }));
     });
     return out;
+  }
+
+  // Every live worker in every town. Relay recipients are deliberately not
+  // limited to the current workspace: the world view already establishes
+  // that Agent Town spans all of Herdr.
+  allWorkers() {
+    const out = [];
+    for (const town of this.world.towns) {
+      for (const building of town.buildingList) {
+        for (const worker of building.workers) {
+          out.push({ paneId: worker.paneId, worker, building, town });
+        }
+      }
+    }
+    return out;
+  }
+
+  relayRecipients() {
+    return this.allWorkers().filter((e) => e.paneId !== this.readPaneId);
   }
 
   selectedEntry() {
@@ -301,6 +328,45 @@ class App {
     }
   }
 
+  openRelay() {
+    const recipients = this.relayRecipients();
+    if (!recipients.length) {
+      this.setStatus('no other agents are running', 3500);
+      return;
+    }
+    this.mode = 'relay';
+    this.relayRecipientIndex = 0;
+    this.relayRecipientPaneId = null;
+    this.relayCompose = false;
+    this.relayText = '';
+  }
+
+  async sendRelay() {
+    const text = this.relayText.trim();
+    const source = this.allWorkers().find((e) => e.paneId === this.readPaneId);
+    const recipients = this.relayRecipients();
+    const target = recipients.find((e) => e.paneId === this.relayRecipientPaneId);
+    if (!text || !source || !target || this.relaySending) return;
+
+    const envelope = `[Herdr Town message from ${source.worker.name} (${source.paneId})]\n${text}`;
+    this.relaySending = true;
+    try {
+      await promptAgent(target.paneId, envelope);
+      this.relayText = '';
+      this.relayCompose = false;
+      this.relayRecipientPaneId = null;
+      this.mode = 'read';
+      this.setStatus(`relayed ${source.worker.name} → ${target.worker.name}`, 4000);
+      this.messages.entries.delete(target.paneId);
+    } catch (e) {
+      const raw = (e.message || '').split('\n')[0];
+      const clean = /^Command failed/.test(raw) ? 'agent did not accept the prompt' : raw;
+      this.setStatus(`could not relay: ${clean}`, 5000);
+    } finally {
+      this.relaySending = false;
+    }
+  }
+
   // A prompt is only offered when Herdr says the agent is blocked. Herdr's
   // detection is manifest-driven and field-tested across 19 agents; this only
   // decides what the options are, never whether a prompt exists.
@@ -348,6 +414,7 @@ class App {
 
   render(cols, rows) {
     if (this.mode === 'read') return this.renderRead(cols, rows);
+    if (this.mode === 'relay') return this.renderRelay(cols, rows);
 
     const canvasRows = rows - CHROME_ROWS;
     const cv = new Canvas(cols, canvasRows * 2, P.black);
@@ -391,6 +458,56 @@ class App {
 
     const lines = [this.header(cols), ...cv.render(), labelRow, ...this.footer(cols)];
     return `\x1b[H${lines.join('\x1b[K\r\n')}\x1b[K`;
+  }
+
+  renderRelay(cols, rows) {
+    const source = this.allWorkers().find((e) => e.paneId === this.readPaneId);
+    const recipients = this.relayRecipients();
+    if (!source || !recipients.length) { this.mode = 'read'; return this.render(cols, rows); }
+    this.relayRecipientIndex = Math.max(0, Math.min(this.relayRecipientIndex, recipients.length - 1));
+    const target = this.relayCompose
+      ? recipients.find((e) => e.paneId === this.relayRecipientPaneId)
+      : recipients[this.relayRecipientIndex];
+    if (!target) {
+      this.relayCompose = false;
+      this.relayRecipientPaneId = null;
+      this.relayRecipientIndex = 0;
+      this.setStatus('recipient is no longer running', 3500);
+      return this.renderRelay(cols, rows);
+    }
+    const lines = [];
+    lines.push(` ${fg(P.cyan)}${BOLD}AGENT RELAY${RESET}  ${fg(P.white)}${source.worker.name}${RESET}${fg(P.dark)} (${source.paneId})${RESET} ${fg(P.slate)}→${RESET} ${fg(P.white)}${target.worker.name}${RESET}${fg(P.dark)} (${target.paneId})${RESET}`);
+    lines.push(`${fg(P.dark)}${'─'.repeat(cols)}${RESET}`);
+
+    if (this.relayCompose) {
+      const inner = Math.max(20, cols - 4);
+      const wrapped = wrapText(this.relayText || '', inner);
+      lines.push(`  ${fg(P.slate)}Message delivered with sender name and pane ID:${RESET}`);
+      lines.push('');
+      for (const piece of wrapped.slice(-(Math.max(1, rows - 7)))) {
+        lines.push(`  ${fg(P.white)}${piece}${RESET}`);
+      }
+      while (lines.length < rows - 2) lines.push('');
+      lines.push(this.relaySending
+        ? ` ${fg(P.cyan)}sending…${RESET}`
+        : ` ${fg(P.lime)}▌${RESET}`);
+      lines.push(` ${fg(P.white)}enter${RESET}${fg(P.slate)} send${RESET}${fg(P.dark)}  ${RESET}${fg(P.white)}esc${RESET}${fg(P.slate)} recipients${RESET}${fg(P.dark)}  ${RESET}${fg(P.white)}ctrl+u${RESET}${fg(P.slate)} clear${RESET}`);
+    } else {
+      const bodyRows = Math.max(3, rows - 4);
+      const start = Math.max(0, Math.min(this.relayRecipientIndex - Math.floor(bodyRows / 2), recipients.length - bodyRows));
+      for (let i = start; i < Math.min(recipients.length, start + bodyRows); i++) {
+        const e = recipients[i];
+        const selected = i === this.relayRecipientIndex;
+        const marker = selected ? `${fg(P.lime)}›${RESET}` : ' ';
+        const town = truncate(e.town.label, 20);
+        const task = truncate(e.building.label, Math.max(10, cols - width(town) - width(e.worker.name) - 22));
+        lines.push(` ${marker} ${selected ? BOLD + fg(P.white) : fg(P.grey)}${e.worker.name}${RESET} ${fg(STATE_COLOR[e.worker.state] || P.grey)}${e.worker.state}${RESET} ${fg(P.slate)}${task}${RESET} ${fg(P.dark)}· ${town} · ${e.paneId}${RESET}`);
+      }
+      while (lines.length < rows - 2) lines.push('');
+      lines.push(` ${fg(P.grey)}${recipients.length} possible recipient${recipients.length === 1 ? '' : 's'} across all towns${RESET}`);
+      lines.push(` ${fg(P.white)}↑↓${RESET}${fg(P.slate)} choose${RESET}${fg(P.dark)}  ${RESET}${fg(P.white)}enter${RESET}${fg(P.slate)} write message${RESET}${fg(P.dark)}  ${RESET}${fg(P.white)}esc${RESET}${fg(P.slate)} back${RESET}`);
+    }
+    return `\x1b[H${lines.slice(0, rows).join('\x1b[K\r\n')}\x1b[K`;
   }
 
   // The reading view. Deliberately real terminal text rather than the 3x5
@@ -476,8 +593,8 @@ class App {
         ? `   ${fg(P.cyan)}${truncate(this.status, Math.max(10, cols - 30))}${RESET}`
         : '';
       const keys = choices
-        ? [[`1-${choices.options.length}`, 'answer'], ['r', 'reply'], ['enter', 'go to this agent'], ['esc', 'back'], ['q', 'quit']]
-        : [['↑↓/wheel', 'scroll'], ['r', 'reply'], ['enter', 'go to this agent'], ['esc', 'back'], ['q', 'quit']];
+        ? [[`1-${choices.options.length}`, 'answer'], ['r', 'reply'], ['t', 'talk to agent'], ['enter', 'go to agent'], ['esc', 'back']]
+        : [['↑↓/wheel', 'scroll'], ['r', 'reply'], ['t', 'talk to agent'], ['enter', 'go to agent'], ['esc', 'back']];
       const keyText = keys
         .map(([k, d]) => `${fg(P.white)}${k}${RESET}${fg(P.slate)} ${d}${RESET}`)
         .join(`${fg(P.dark)}  ${RESET}`);
@@ -634,6 +751,13 @@ class App {
       else if (ev.name === 'wheel-down' && ev.press) this.readScroll += 3;
       return;
     }
+    if (this.mode === 'relay') {
+      if (this.relayCompose) return;
+      const last = this.relayRecipients().length - 1;
+      if (ev.name === 'wheel-up' && ev.press) this.relayRecipientIndex = Math.max(0, this.relayRecipientIndex - 1);
+      else if (ev.name === 'wheel-down' && ev.press) this.relayRecipientIndex = Math.min(last, this.relayRecipientIndex + 1);
+      return;
+    }
     if (this.mode === 'world') return;
 
     // Wheel walks the workers, which is the same thing the arrow keys do.
@@ -664,6 +788,19 @@ class App {
     const left = s === '\x1b[D' || s === '\x1bOD' || s === 'h';
     const up = s === '\x1b[A' || s === '\x1bOA' || s === 'k';
     const down = s === '\x1b[B' || s === '\x1bOB' || s === 'j';
+
+    // While composing a relay, every printable key belongs to its composer.
+    if (this.relayCompose) {
+      if (s === '\x1b' || s === '\x03') { this.relayCompose = false; this.relayText = ''; return; }
+      if (s === '\r' || s === '\n') { this.sendRelay(); return; }
+      if (s === '\x7f' || s === '\b') { this.relayText = [...this.relayText].slice(0, -1).join(''); return; }
+      if (s === '\x15') { this.relayText = ''; return; }
+      if (!s.startsWith('\x1b')) {
+        const printable = [...s].filter((ch) => ch.codePointAt(0) >= 0x20 && ch.codePointAt(0) !== 0x7f).join('');
+        if (printable) this.relayText += printable;
+      }
+      return;
+    }
 
     // While composing, every key belongs to the composer. Nothing here may
     // fall through to a town binding, or typing "q" would quit mid-sentence.
@@ -703,10 +840,27 @@ class App {
       else if (this.choices && /^[1-9]$/.test(s)) {
         this.answerChoice(Number(s) - 1);
       } else if (s === 'r') { this.replyMode = true; this.replyText = ''; }
+      else if (s === 't') this.openRelay();
       else if (left) this.mode = 'town';
       else if (s === '\r' || s === '\n') {
         const e = this.selectionList().find((x) => x.paneId === this.readPaneId);
         if (e) this.pendingFocus = e.worker;
+      }
+      return;
+    }
+
+    if (this.mode === 'relay') {
+      const recipients = this.relayRecipients();
+      if (s === '\x1b' || s === '\x03' || s === 'q' || left) { this.mode = 'read'; return; }
+      if (up) this.relayRecipientIndex = Math.max(0, this.relayRecipientIndex - 1);
+      else if (down) this.relayRecipientIndex = Math.min(recipients.length - 1, this.relayRecipientIndex + 1);
+      else if (s === '\r' || s === '\n') {
+        const target = recipients[this.relayRecipientIndex];
+        if (target) {
+          this.relayRecipientPaneId = target.paneId;
+          this.relayCompose = true;
+          this.relayText = '';
+        }
       }
       return;
     }
