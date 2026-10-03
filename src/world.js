@@ -150,7 +150,7 @@ function accrue(world, store, elapsedMs) {
 function record(world, store) {
   for (const town of world.towns) {
     for (const b of town.buildingList) {
-      store.observe(b.key, { workspaceId: town.id, label: b.label, state: b.state });
+      store.observe(b.key, { workspaceId: town.id, label: b.label, state: b.state, workers: b.workers });
     }
   }
 }

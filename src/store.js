@@ -99,11 +99,19 @@ class Store {
   // Remember what a feature is, so it can be drawn again after its agents are
   // gone. `done` latches: once a feature has been seen finished it stays a
   // finished building rather than decaying into a ruin.
-  observe(key, { workspaceId, label, state }) {
+  observe(key, { workspaceId, label, state, workers = [] }) {
     const f = this.data.features[key] || (this.data.features[key] = { ms: 0, seen: 0 });
     f.workspaceId = workspaceId;
     f.label = label;
     f.seen = Date.now();
+    // First observation since metadata recording began; do not backdate old records.
+    if (!f.firstObserved) f.firstObserved = f.seen;
+    if (!Array.isArray(f.contributors)) f.contributors = [];
+    for (const w of workers) {
+      if (!f.contributors.some((c) => c.paneId === w.paneId && c.name === w.name)) {
+        f.contributors.push({ paneId: w.paneId, name: w.name });
+      }
+    }
     if (state === 'done') f.done = true;
     this.dirty = true;
   }

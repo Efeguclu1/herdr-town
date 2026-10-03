@@ -66,12 +66,33 @@ Press `enter` and the town gives way to the full message:
  ↑↓/wheel scroll  r reply  enter go to this agent  esc back  q quit
 ```
 
-Press `r` and the footer becomes a composer:
+Press `r` to open a full-screen reply editor, pinned to that agent:
 
-![Reading an agent and replying to it](docs/reply.png)
+1. Write or paste your message. **Enter inserts a newline**, never sends.
+2. Use arrows and Home/End (or Ctrl+A/Ctrl+E) to edit. Ctrl+U clears the draft.
+   **Wheel or Page Up/Down scrolls** without moving the insertion point. The
+   viewport stays where you scroll until you type, paste, or move the cursor;
+   the status row shows the visible row range.
+3. Press **Ctrl+S** to review the recipient and complete message.
+4. Press **Enter on the confirmation screen** to send, or Esc to keep editing.
 
-That goes out through `herdr agent prompt`. The agent starts working, its
-building sprouts scaffolding, and you never opened its pane.
+Esc from the editor keeps a separate draft for that agent; press `r` to resume
+it later. Drafts stay **in memory for this town session only** and are lost when
+the view closes. They are not written to the activity history or disk.
+
+Bracketed paste preserves newlines and indentation and strips terminal control
+sequences. Pasted keys cannot navigate, approve choices, or confirm a send.
+The terminal/host must forward bracketed-paste markers for that protection;
+ordinary unbracketed newlines still only insert new lines while editing.
+Drafts are limited to 64,000 characters (paste buffering uses a conservative
+64,000 UTF-16-unit limit), with a warning if truncated.
+
+Delivery goes through `herdr agent prompt`. The editor freezes while sending
+so a double Enter cannot deliver twice. Errors keep the draft and never retry
+automatically: check the agent first if delivery was uncertain. If the agent
+vanishes, the draft stays available but cannot be sent to a substitute pane.
+
+![Earlier single-line reply UI (before the multiline editor)](docs/reply.png)
 
 ### Agent-to-agent relay
 
@@ -139,6 +160,64 @@ have selected keeps a frame around its plot. A workspace with nothing built
 yet shows open land rather than a placeholder building, so the map never
 promises a town that the town view then shows as an empty field.
 
+## Attention, buildings, and search
+
+Three shortcuts work from both town and world view:
+
+- **`a` — Attention queue:** blocked agents across all towns, oldest observed
+  wait first. Press `enter` to read an agent, then `r` to reply as usual.
+  `esc` returns to the queue. Waits are measured while this view is running,
+  not the agent's actual block start time; reopening the town resets them.
+- **`b` — Building browser:** every building in the selected town, including
+  finished buildings and ruins without workers. Press `enter` to inspect its
+  status, accumulated agent working time, floors, recorded dates, live agents,
+  and contributors. Use arrows or the wheel to scroll the inspector.
+- **`/` — Search:** find towns, buildings, and live workers across all workspaces
+  by workspace name, task title, agent name, or pane ID. Enter on a town visits
+  it, on a building opens its inspector, and on a worker reads its message.
+
+Type in any list to filter it (case-insensitive; all words must match).
+`↑`/`↓` or the wheel selects a result, `enter` opens it, `ctrl+u` clears the
+filter, and `esc` goes back. Printable shortcuts such as `q` are search text
+while in a list; `ctrl+c` quits. Selection follows stable IDs across refreshes.
+If a selected result disappears, choose again rather than silently opening a
+different agent.
+
+First-observation dates and contributor history are recorded from this release
+onward by the background recorder; older records show missing fields as
+**not recorded**. If upgrading with a recorder already running, restart it to
+begin collecting the new metadata. Last recorded activity is when the feature
+was last observed, including idle observations—not its last code change.
+Working time and building height are **not completion percentages**.
+
+## While you were away
+
+Press **`s`** from town or world view for a summary of recorded changes since
+last marking the summary read: feature completions, newly blocked agents,
+other agent state changes, arrivals/departures, and the towns affected.
+
+- `↑`/`↓`, Page Up/Down, or the wheel scrolls; **`r` refreshes** the snapshot.
+- **`c` marks the displayed snapshot read**. Later updates remain unread.
+- **Esc goes back without marking anything read**.
+- Unread updates show a footer hint and open automatically when starting the
+  view. If the host forwards terminal focus reports, returning after at least a
+  minute also opens the summary from town/world view. Editors are never interrupted.
+
+The recorder keeps up to **1,000 events / 7 days**, in `progress.json`, including
+its last observed baseline so restarting does not replay all agents as new.
+The first snapshot establishes that baseline; it does not invent past events.
+Summaries use the recorder's 15-second observations, not exact transition times,
+and can miss changes between polls. Recording gaps, stale data, and expired
+history are explicitly labelled. This is not a transcript archive: only task,
+workspace, agent, and state metadata are recorded.
+
+The view writes acknowledgements separately to `summary-seen.json` in the plugin
+state directory, shared by town views. It never writes recorder-owned progress.
+
+**Upgrading:** reopen the town and restart the existing recorder to enable event
+recording. Without a running updated recorder, `s` explains that history is not
+yet available (or shows its last observation as stale).
+
 ## The town remembers
 
 Towns are not just a view of what is running right now. Every feature its
@@ -194,11 +273,15 @@ browsable with the pointer.
 | `w` / `tab` | World view | Back to town view |
 | `m` | Release the mouse back to Herdr | Same |
 | `r` | Refresh now | Refresh now |
+| `s` | While-you-were-away summary | Same |
+| `a` | All-town attention queue | Same |
+| `b` | Browse this town's buildings | Browse selected town's buildings |
+| `/` | Search all towns | Same |
 | `q` / `esc` | Quit | Quit |
 
 ### Reading and relay controls
 
-| Key | Reading view | Relay recipient list | Composer |
+| Key | Reading view | Relay recipient list | Relay composer |
 | --- | --- | --- | --- |
 | `↑` `↓` / wheel | Scroll message | Choose recipient | — |
 | `r` | Reply to this agent | — | — |
@@ -208,8 +291,9 @@ browsable with the pointer.
 | `esc` | Back to town | Back to message | Cancel |
 | `q` | Quit | Back to message | Type `q` |
 
-While composing, printable keys belong to the message, so typing `q` writes a
-`q` instead of quitting.
+Reply editor controls differ from the relay composer: **Enter adds a newline,
+Ctrl+S reviews, then Enter confirms**. Esc keeps the reply draft. In both editors,
+printable keys belong to the message, so typing `q` writes a `q` instead of quitting.
 
 ## Terminal size
 
@@ -297,6 +381,10 @@ handles both with no per-agent parser, which matters because Herdr supports
 | `src/message.js` | Reading agent screens and stripping chrome |
 | `src/world.js` | Herdr snapshot to towns, buildings, workers |
 | `src/store.js` | Persistent build progress and town history |
+| `src/navigation.js` | Search entries, stable identities, observed blocked waits |
+| `src/activity.js` | Bounded recorded changes and separate summary acknowledgements |
+| `src/reply.js` | Multiline editing and session-only per-agent drafts |
+| `src/input.js` | Streaming keys, bracketed paste, mouse, and focus reports |
 | `src/mouse.js` | SGR mouse reports |
 | `src/font.js` | 3x5 bitmap font for in-world labels |
 
@@ -325,7 +413,8 @@ could actually capture, so if the town shows nonsense for your agent, the fix
 starts with a capture:
 
 ```bash
-npm test                                    # run the extractor over every fixture
+npm test                                    # extraction, navigation, activity, reply, input tests
+python3 tests/terminal-smoke.py              # optional Unix PTY test with a fake Herdr (no live agents)
 node tools/capture.js w2:pF codex-blocked   # save your agent's screen as a fixture
 ```
 

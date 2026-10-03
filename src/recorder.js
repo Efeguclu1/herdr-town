@@ -5,6 +5,7 @@ const path = require('node:path');
 const { snapshot } = require('./herdr');
 const { Store, STATE_DIR } = require('./store');
 const { buildWorld, accrue, record } = require('./world');
+const { recordActivity } = require('./activity');
 
 // Buildings are supposed to grow with the time agents actually spend working.
 // If that were only counted while the town view was open, a building would
@@ -89,6 +90,8 @@ async function runRecorder({ log = () => {} } = {}) {
       const world = buildWorld(snap, store);
       if (prevAt) accrue(world, store, snap.at - prevAt);
       record(world, store);
+      store.data.activity = recordActivity(store.data.activity, world, snap.at);
+      store.dirty = true;
       prevAt = snap.at;
       failures = 0;
     } catch (e) {

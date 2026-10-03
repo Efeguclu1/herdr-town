@@ -8,13 +8,16 @@ const {
 } = require('./herdr');
 const { parseChoices } = require('./choices');
 const { Store } = require('./store');
+const { AttentionClock, navigationEntries, entriesFor } = require('./navigation');
 const { buildWorld, addGhosts, FLOOR_MINUTES, MAX_FLOORS } = require('./world');
 const { ensureRecorder } = require('./ensure-recorder');
 const { MessageCache } = require('./message');
 const mouse = require('./mouse');
 const daylight = require('./daylight');
 
-const { StringDecoder } = require('node:string_decoder');
+const { SummaryCursor, summarySince } = require('./activity');
+const { ReplyDrafts, cleanText } = require('./reply');
+const { TerminalInput, ENABLE: INPUT_ENABLE, DISABLE: INPUT_DISABLE } = require('./input');
 
 const HEADER_ROWS = 1;
 const LABEL_ROWS = 1;
@@ -123,16 +126,37 @@ function humanDuration(ms) {
   return rem ? `${h}h${rem}m` : `${h}h`;
 }
 
+// Hard-wrap the editor without collapsing indentation or blank lines.
+function replyLayout(text, cursor, cols) {
+  const lines = [''];
+  let column = 0;
+  let cursorRow = 0;
+  function put(ch) {
+    if (ch === '\n') { lines.push(''); column = 0; return; }
+    const size = charWidth(ch.codePointAt(0));
+    if (column + size > cols) { lines.push(''); column = 0; }
+    lines[lines.length - 1] += ch;
+    column += size;
+  }
+  const chars = [...text];
+  for (let i = 0; i <= chars.length; i++) {
+    if (cursor === i) { put('▌'); cursorRow = lines.length - 1; }
+    if (i < chars.length) put(chars[i]);
+  }
+  return { lines, cursorRow };
+}
+
 // ------------------------------------------------------------------ app
 
 class App {
-  constructor() {
-    this.store = new Store({ readOnly: true });
+  constructor({ store = new Store({ readOnly: true }), messages = new MessageCache(),
+    summaryCursor = new SummaryCursor(null), sendPrompt = promptAgent } = {}) {
+    this.store = store;
     // What each agent last said. Fetched behind the render loop, never in it.
-    this.messages = new MessageCache();
+    this.messages = messages;
     this.world = { towns: [], at: 0 };
     this.frame = 0;
-    this.mode = 'town'; // 'town' | 'world'
+    this.mode = 'town'; // town | world | read | relay | browse | inspect | summary
     this.townIndex = 0;
     this.scroll = 0;
     this.selectedPaneId = null;
@@ -146,13 +170,28 @@ class App {
     // an undefined scroll turns the slice bounds into NaN and renders nothing.
     this.readPaneId = null;
     this.readScroll = 0;
+    this.readReturnMode = 'town';
+    this.attentionClock = new AttentionClock();
+    this.browser = null;
+    this.inspectKey = null;
+    this.inspectScroll = 0;
+    this.summaryCursor = summaryCursor;
+    this.summary = null;
+    this.summaryScroll = 0;
+    this.summaryReturnMode = 'town';
+    this.awayAt = null;
+    this.polling = false;
     // Worker rectangles from the last rendered frame, in canvas pixels.
     this.hitRects = [];
     this.mouseEnabled = true;
     // Reply composer, only reachable from the reading view.
     this.replyMode = false;
-    this.replyText = '';
-    this.replySending = false;
+    this.reply = new ReplyDrafts();
+    this.replyScroll = 0;
+    this.replyFollowCursor = true;
+    this.replyPageRows = 10;
+    this.replyMaxScroll = Infinity;
+    this.sendPrompt = sendPrompt;
     // Agent-to-agent relay. The worker being read is the sender; `t` opens a
     // cross-town recipient picker, then a dedicated composer. Herdr delivers
     // the resulting envelope straight to the recipient pane.
@@ -249,6 +288,8 @@ class App {
   }
 
   async poll() {
+    if (this.polling) return;
+    this.polling = true;
     try {
       const snap = await snapshot();
       // The background recorder owns build progress; the view just reads
@@ -256,6 +297,7 @@ class App {
       // whose agents have since gone.
       this.store.syncFromDisk();
       this.world = addGhosts(buildWorld(snap, this.store), this.store);
+      this.attentionClock.update(this.world);
       this.error = null;
 
       // Follow the selected town by id, so it survives workspaces being
@@ -287,7 +329,227 @@ class App {
       }
     } catch (e) {
       this.error = e.message || String(e);
+    } finally {
+      this.polling = false;
     }
+  }
+
+  // ----------------------------------------------------------- away summary
+
+  unseenSummary() {
+    return summarySince(this.store.data && this.store.data.activity, this.summaryCursor.value);
+  }
+
+  offerSummary() {
+    const unseen = this.unseenSummary();
+    if (!this.replyMode && ['town', 'world'].includes(this.mode)
+      && (unseen.events.length || unseen.truncated)) this.openSummary();
+  }
+
+  onFocus(focused, now = Date.now()) {
+    if (!focused) this.awayAt = now;
+    else {
+      if (this.awayAt !== null && now - this.awayAt >= 60000) this.offerSummary();
+      this.awayAt = null;
+    }
+  }
+
+  openSummary() {
+    this.store.syncFromDisk();
+    this.summaryCursor.load();
+    if (this.mode !== 'summary') this.summaryReturnMode = this.mode;
+    // Freeze the displayed range: acknowledging it must not consume events
+    // arriving in the background while the user is still reading.
+    this.summary = this.unseenSummary();
+    this.summaryScroll = 0;
+    this.summaryError = '';
+    this.mode = 'summary';
+  }
+
+  acknowledgeSummary() {
+    if (!this.summary || this.summary.unavailable) return;
+    try {
+      this.summaryCursor.acknowledge(this.summary.epoch, this.summary.through);
+      this.mode = this.summaryReturnMode;
+      this.setStatus('displayed summary marked read');
+    } catch {
+      this.summaryError = 'Could not save acknowledgement. Updates remain unread.';
+    }
+  }
+
+  renderSummary(cols, rows) {
+    const summary = this.summary;
+    const text = [];
+    if (summary.unavailable) {
+      text.push('Activity history is not available yet.', '',
+        'Start or restart the recorder to enable summaries. Its first snapshot establishes a baseline; later changes appear here.');
+    } else {
+      const events = summary.events;
+      const changed = new Set(events.filter((e) => e.townId).map((e) => e.townId));
+      text.push(`${events.filter((e) => e.type === 'finished').length} feature completions · ${events.filter((e) => e.type === 'blocked').length} blocks · ${changed.size} towns changed`,
+        'Since last marked read. Observation times, not exact transition times.',
+        `Recorder last observed: ${new Date(summary.lastRecorded).toLocaleString()}`);
+      if (Date.now() - summary.lastRecorded > 60000) text.push('Recorder data is stale. Recent changes may be missing.');
+      if (summary.truncated) text.push('Some older updates expired (7 days / 1,000 events). This summary is incomplete.');
+      if (!events.length) text.push('', 'No retained unread changes.');
+      const gaps = events.filter((e) => e.type === 'gap');
+      for (const gap of gaps) text.push(`Recording gap: ${new Date(gap.since).toLocaleString()} → ${new Date(gap.at).toLocaleString()}. Intermediate changes may be missing.`);
+      const towns = new Map();
+      for (const event of events) {
+        if (!event.townId) continue;
+        if (!towns.has(event.townId)) towns.set(event.townId, []);
+        towns.get(event.townId).push(event);
+      }
+      const labels = { started: 'agent appeared / changed task', blocked: 'became blocked',
+        unblocked: 'left blocked state', state: 'agent state changed', finished: 'feature observed done', left: 'agent left task' };
+      for (const list of towns.values()) {
+        text.push('', `${list[list.length - 1].town}:`);
+        for (const event of list) {
+          text.push(`  ${new Date(event.at).toLocaleString()} · ${labels[event.type] || event.type}`,
+            `    ${event.task}${event.name ? ` · ${event.name} (${event.paneId}) · ${event.state}` : ''}`);
+        }
+      }
+    }
+    const body = text.flatMap((line) => wrapText(line, Math.max(1, cols - 2))).map((line) => ` ${line}`);
+    const capacity = rows - 4;
+    this.summaryScroll = Math.max(0, Math.min(this.summaryScroll, body.length - capacity));
+    return this.renderPanel(cols, rows, 'WHILE YOU WERE AWAY', body.slice(this.summaryScroll),
+      'c mark read · r refresh · esc back', this.summaryError || `↑↓/wheel scroll · ${this.summaryScroll + 1}-${Math.min(body.length, this.summaryScroll + capacity)} of ${body.length}`);
+  }
+
+  // ---------------------------------------------------------- navigation
+
+  openBrowser(kind) {
+    this.browser = {
+      kind, query: '', townId: this.town && this.town.id,
+      returnMode: this.mode, selectedId: null,
+    };
+    this.mode = 'browse';
+    const entries = this.browserEntries();
+    const selected = kind === 'buildings' && this.selectedEntry();
+    this.browser.selectedId = selected ? `building:${selected.building.key}` : (entries[0] || {}).id;
+  }
+
+  browserEntries() {
+    return navigationEntries(this.world, { ...this.browser, clock: this.attentionClock });
+  }
+
+  moveBrowser(delta) {
+    const entries = this.browserEntries();
+    if (!entries.length) return;
+    const current = entries.findIndex((e) => e.id === this.browser.selectedId);
+    const next = current < 0 ? 0 : Math.max(0, Math.min(entries.length - 1, current + delta));
+    this.browser.selectedId = entries[next].id;
+  }
+
+  browserKey(s) {
+    if (s === '\x03') { this.running = false; return; }
+    if (s === '\x1b') { this.mode = this.browser.returnMode; return; }
+    if (s === '\x1b[A' || s === '\x1bOA') { this.moveBrowser(-1); return; }
+    if (s === '\x1b[B' || s === '\x1bOB') { this.moveBrowser(1); return; }
+    if (s === '\x1b[5~') { this.moveBrowser(-10); return; }
+    if (s === '\x1b[6~') { this.moveBrowser(10); return; }
+    if (s === '\r' || s === '\n') {
+      const e = this.browserEntries().find((x) => x.id === this.browser.selectedId);
+      if (!e) return; // Never redirect an action when a poll removes its target.
+      if (e.kind === 'building') {
+        this.inspectKey = e.building.key;
+        this.inspectScroll = 0;
+        this.mode = 'inspect';
+      } else {
+        this.townIndex = this.world.towns.findIndex((t) => t.id === e.town.id);
+        this.selectedTownId = e.town.id;
+        this.scroll = 0;
+        if (e.worker) {
+          this.selectedPaneId = e.worker.paneId;
+          this.readPaneId = e.worker.paneId;
+          this.readScroll = 0;
+          this.readReturnMode = 'browse';
+          this.choices = null;
+          this.choicesFor = null;
+          this.mode = 'read';
+        } else this.mode = 'town';
+      }
+      return;
+    }
+    const before = this.browser.query;
+    if (s === '\x7f' || s === '\b') this.browser.query = [...before].slice(0, -1).join('');
+    else if (s === '\x15') this.browser.query = '';
+    else if (!s.startsWith('\x1b')) {
+      this.browser.query += [...s].filter((ch) => ch.codePointAt(0) >= 0x20
+        && ch.codePointAt(0) !== 0x7f).join('');
+    }
+    if (before !== this.browser.query) this.browser.selectedId = (this.browserEntries()[0] || {}).id;
+  }
+
+  // Plain, clipped rows prevent long workspace names or terminal control
+  // characters in titles from escaping these panels. Colour only after clipping.
+  renderPanel(cols, rows, title, body, help, status = '') {
+    const lines = [fg(P.cyan) + BOLD + truncate(` ${title}`, cols) + RESET,
+      fg(P.dark) + '─'.repeat(cols) + RESET];
+    for (const text of body.slice(0, rows - 4)) {
+      lines.push(fg(text.startsWith(' ›') ? P.lime : P.white) + truncate(text, cols) + RESET);
+    }
+    while (lines.length < rows - 2) lines.push('');
+    lines.push(fg(this.error ? P.red : P.slate)
+      + truncate(` ${this.error ? `herdr: ${this.error} (showing last snapshot)` : status}`, cols) + RESET);
+    lines.push(fg(P.grey) + truncate(` ${help}`, cols) + RESET);
+    return `\x1b[H${lines.join('\x1b[K\r\n')}\x1b[K`;
+  }
+
+  renderBrowser(cols, rows) {
+    const b = this.browser;
+    const entries = this.browserEntries();
+    const index = entries.findIndex((e) => e.id === b.selectedId);
+    const capacity = Math.max(1, rows - 5);
+    const start = Math.max(0, Math.min(index - Math.floor(capacity / 2), entries.length - capacity));
+    const body = [` / ${b.query || '(type to filter)'}`];
+    for (const e of entries.slice(start, start + capacity)) {
+      let text;
+      if (e.worker) {
+        const since = this.attentionClock.since.get(e.worker.paneId);
+        const wait = b.kind === 'attention' ? ` · observed ${humanDuration(Math.max(0, Date.now() - since))}` : '';
+        text = `${e.worker.name} · ${e.worker.state}${wait} · ${e.building.label} · ${e.town.label} · ${e.worker.paneId}`;
+      } else if (e.building) text = `${e.building.label} · ${e.building.state} · ${e.town.label}`;
+      else text = `${e.town.label} · ${e.town.agentCount} agents`;
+      body.push(` ${e.id === b.selectedId ? '›' : ' '} [${e.kind}] ${text}`);
+    }
+    if (!entries.length) body.push(b.query ? ' No matches. Ctrl+U clears the filter.'
+      : b.kind === 'attention' ? ' No blocked agents across any town.' : ' Nothing here yet.');
+    const titles = { attention: 'ATTENTION · oldest observed first', buildings: 'BUILDINGS · live and historical', search: 'SEARCH · all towns' };
+    const status = index < 0 && entries.length ? 'Selection left this list. Use arrows to select again.'
+      : `${entries.length} result${entries.length === 1 ? '' : 's'}${index >= 0 ? ` · ${index + 1}/${entries.length}` : ''}`;
+    return this.renderPanel(cols, rows, titles[b.kind], body,
+      '↑↓ select · enter open · esc back · ^U clear', status);
+  }
+
+  renderInspector(cols, rows) {
+    const e = entriesFor(this.world).find((x) => x.kind === 'building' && x.building.key === this.inspectKey);
+    if (!e) return this.renderPanel(cols, rows, 'BUILDING INSPECTOR',
+      [' This building is no longer available.'], 'esc back');
+    const b = e.building;
+    const saved = this.store.entry(b.key) || {};
+    const date = (value) => value ? new Date(value).toLocaleString() : 'not recorded';
+    const contributors = [...(saved.contributors || [])];
+    for (const w of b.workers) {
+      if (!contributors.some((c) => c.paneId === w.paneId && c.name === w.name)) contributors.push(w);
+    }
+    const text = [b.label, `Town: ${e.town.label}`, `Status: ${b.state}${b.standing ? ' (historical)' : ''}`,
+      `Agent working time: ${humanDuration(b.workMs)} · ${b.floors}/${MAX_FLOORS} floors`,
+      'Working time is not completion percentage.',
+      `First recorded observation: ${date(saved.firstObserved)}`,
+      `Last recorded activity: ${date(saved.seen)}`,
+      `Previously observed done: ${saved.done ? 'yes' : 'not recorded'}`, '',
+      'Live agents:', ...b.workers.map((w) => `  ${w.name} · ${w.state} · ${w.paneId}`),
+      ...(b.workers.length ? [] : ['  none']), '', 'Recorded contributors (plus live agents):',
+      ...contributors.map((w) => `  ${w.name} · ${w.paneId}`),
+      ...(contributors.length ? [] : ['  not recorded']), '',
+      'Contributor and first-observation history starts with this release.'];
+    const body = text.flatMap((line) => wrapText(line, Math.max(1, cols - 2))).map((line) => ` ${line}`);
+    const capacity = rows - 4;
+    this.inspectScroll = Math.max(0, Math.min(this.inspectScroll, body.length - capacity));
+    return this.renderPanel(cols, rows, 'BUILDING INSPECTOR', body.slice(this.inspectScroll),
+      '↑↓/wheel scroll · esc back', `${this.inspectScroll + 1}-${Math.min(body.length, this.inspectScroll + capacity)} of ${body.length}`);
   }
 
   // ---------------------------------------------------------------- draw
@@ -297,35 +559,135 @@ class App {
   openRead() {
     const e = this.selectedEntry();
     if (!e) return;
+    this.readReturnMode = 'town';
     this.mode = 'read';
     this.readPaneId = e.paneId;
     this.readScroll = 0;
   }
 
-  // Send the composed reply to the agent. Errors surface in the status line
-  // rather than throwing, so a failed send never takes the town down.
+  get replyText() { return this.reply.text; }
+
+  openReply() {
+    const e = this.allWorkers().find((x) => x.paneId === this.readPaneId);
+    if (!e || this.reply.sending) return;
+    this.reply.open({ paneId: e.paneId, name: e.worker.name, townId: e.town.id, town: e.town.label, task: e.building.label });
+    this.replyMode = true;
+    this.replyScroll = 0;
+    this.replyFollowCursor = true;
+    this.replyMaxScroll = Infinity;
+  }
+
+  // Scrolling is viewport navigation, not cursor movement. Following the
+  // insertion point on every repaint would immediately undo a wheel/page event.
+  scrollReply(delta) {
+    if (this.reply.sending) return;
+    this.replyFollowCursor = false;
+    this.replyScroll = Math.max(0, Math.min(this.replyMaxScroll, this.replyScroll + delta));
+  }
+
+  replyTarget() {
+    const t = this.reply.target;
+    return t && this.allWorkers().find((e) => e.paneId === t.paneId
+      && e.worker.name === t.name && e.town.id === t.townId);
+  }
+
+  replyKey(s) {
+    const r = this.reply;
+    if (r.sending) return; // Freeze the exact reviewed payload until delivery finishes.
+    if (s === '\x1b' || s === '\x03') {
+      if (r.confirming) { r.confirming = false; this.replyFollowCursor = true; }
+      else { r.save(); this.replyMode = false; this.setStatus('draft kept for this agent (this session)'); }
+      return;
+    }
+    if (s === '\x1b[5~' || s === '\x1b[6~') {
+      this.scrollReply((s === '\x1b[5~' ? -1 : 1) * this.replyPageRows);
+      return;
+    }
+    if (r.confirming) {
+      if (s === '\r' || s === '\n') this.sendReply();
+      else if (s === '\x1b[A' || s === '\x1bOA') this.scrollReply(-1);
+      else if (s === '\x1b[B' || s === '\x1bOB') this.scrollReply(1);
+      return;
+    }
+    if (s === '\x13') { // Ctrl+S reviews; Enter only inserts a newline while editing.
+      if (!r.text.trim()) { r.error = 'Write a message before reviewing.'; return; }
+      if (!this.replyTarget()) { r.error = 'Agent no longer running. Draft kept; nothing sent.'; return; }
+      r.confirming = true;
+      r.error = '';
+      this.replyScroll = 0;
+      this.replyFollowCursor = false;
+      return;
+    }
+    // Resume following when the user edits or deliberately moves the cursor,
+    // even when a movement key hits a document boundary.
+    this.replyFollowCursor = true;
+    r.key(s);
+  }
+
+  onPaste(text, truncated = false) {
+    if (this.replyMode) {
+      // Even a pasted Enter at confirmation is text, never permission to send.
+      if (!this.reply.confirming && !this.reply.sending) this.replyFollowCursor = true;
+      this.reply.insert(text);
+      if (truncated) this.reply.error = 'Paste truncated to the draft size limit.';
+    } else if (this.relayCompose && !this.relaySending) {
+      this.relayText += cleanText(text).replace(/\n/g, ' ');
+    } else this.setStatus('paste ignored outside an editor');
+  }
+
   async sendReply() {
-    const text = this.replyText.trim();
-    const paneId = this.readPaneId;
-    if (!text || !paneId || this.replySending) return;
-    this.replySending = true;
+    const r = this.reply;
+    if (!this.replyMode || !r.confirming || r.sending || !r.text.trim()) return;
+    if (!this.replyTarget()) {
+      r.error = 'Agent no longer running. Draft kept; nothing sent.';
+      r.confirming = false;
+      this.replyFollowCursor = true;
+      return;
+    }
+    const { paneId } = r.target;
+    const text = r.text; // Preserve indentation and newlines exactly as reviewed.
+    r.sending = true;
     try {
-      await promptAgent(paneId, text);
-      this.replyText = '';
+      await this.sendPrompt(paneId, text);
+      r.drafts.delete(paneId);
+      r.text = '';
+      r.cursor = 0;
+      r.confirming = false;
       this.replyMode = false;
       this.setStatus(`sent to ${paneId}`, 3000);
-      // The agent's screen is about to change, so drop the cached read.
       this.messages.entries.delete(paneId);
-    } catch (e) {
-      // execFile's generic "Command failed: <argv>" is noise in a status bar.
-      const raw = (e.message || '').split('\n')[0];
-      const clean = /^Command failed/.test(raw)
-        ? 'agent did not accept the prompt'
-        : raw;
-      this.setStatus(`could not send: ${clean}`, 5000);
+    } catch {
+      // Do not echo argv (which contains the private draft) from execFile errors.
+      r.error = 'Delivery failed or uncertain. Draft kept; check agent before retrying.';
+      r.confirming = false;
+      this.replyFollowCursor = true;
+      r.save();
     } finally {
-      this.replySending = false;
+      r.sending = false;
     }
+  }
+
+  renderReply(cols, rows) {
+    const r = this.reply;
+    const t = r.target;
+    const target = this.replyTarget();
+    const layout = replyLayout(r.text, r.confirming ? null : r.cursor, cols - 2);
+    const capacity = Math.max(1, rows - 7);
+    this.replyPageRows = Math.max(1, capacity - 1);
+    if (!r.confirming && this.replyFollowCursor) {
+      if (layout.cursorRow < this.replyScroll) this.replyScroll = layout.cursorRow;
+      if (layout.cursorRow >= this.replyScroll + capacity) this.replyScroll = layout.cursorRow - capacity + 1;
+    }
+    this.replyMaxScroll = Math.max(0, layout.lines.length - capacity);
+    this.replyScroll = Math.max(0, Math.min(this.replyScroll, this.replyMaxScroll));
+    const body = [` To: ${t.name} · ${t.paneId} · ${t.town}`, ` Task: ${t.task}`,
+      r.confirming ? ' Review message below. Nothing sent yet.' : ' Enter: newline · PgUp/PgDn/wheel: scroll',
+      ...layout.lines.slice(this.replyScroll, this.replyScroll + capacity).map((line) => ` ${line}`)];
+    const status = r.sending ? 'Sending… editor locked until delivery finishes.'
+      : r.error || (!target ? 'Agent no longer running. Draft kept; cannot send.'
+        : `rows ${this.replyScroll + 1}-${Math.min(layout.lines.length, this.replyScroll + capacity)}/${layout.lines.length} · ${!r.confirming && !this.replyFollowCursor ? 'arrows or typing return to cursor' : `${[...r.text].length} chars · draft kept on Esc`}`);
+    return this.renderPanel(cols, rows, r.confirming ? 'CONFIRM REPLY' : 'WRITE REPLY', body,
+      r.sending ? 'Please wait…' : r.confirming ? 'enter send · esc edit · ↑↓ scroll' : '^S review · esc keep draft · ^U clear', status);
   }
 
   openRelay() {
@@ -389,6 +751,7 @@ class App {
     const paneId = this.readPaneId;
     const shown = this.choices;
     if (!shown || !shown.options[index] || this.answering || !paneId) return;
+    if (!this.allWorkers().some((e) => e.paneId === paneId && e.worker.state === 'blocked')) return;
     const option = shown.options[index];
 
     this.answering = true;
@@ -413,6 +776,10 @@ class App {
   }
 
   render(cols, rows) {
+    if (this.replyMode) return this.renderReply(cols, rows);
+    if (this.mode === 'summary') return this.renderSummary(cols, rows);
+    if (this.mode === 'browse') return this.renderBrowser(cols, rows);
+    if (this.mode === 'inspect') return this.renderInspector(cols, rows);
     if (this.mode === 'read') return this.renderRead(cols, rows);
     if (this.mode === 'relay') return this.renderRelay(cols, rows);
 
@@ -513,9 +880,13 @@ class App {
   // The reading view. Deliberately real terminal text rather than the 3x5
   // pixel font: bubbles are for three words, paragraphs need actual glyphs.
   renderRead(cols, rows) {
-    const e = this.selectionList().find((x) => x.paneId === this.readPaneId)
-      || this.selectedEntry();
-    if (!e) { this.mode = 'town'; return this.render(cols, rows); }
+    const e = this.allWorkers().find((x) => x.paneId === this.readPaneId);
+    if (!e) {
+      this.choices = null;
+      this.choicesFor = null;
+      return this.renderPanel(cols, rows, 'AGENT NO LONGER RUNNING',
+        ['The selected pane is gone. No other agent has been selected.'], 'esc back');
+    }
 
     const w = e.worker;
     const msg = this.messages.get(w.paneId);
@@ -570,22 +941,7 @@ class App {
       });
     }
 
-    if (this.replyMode) {
-      // Composer takes both footer rows: the prompt, and what it will do.
-      const label = `reply to ${w.name} › `;
-      const room = Math.max(10, cols - width(label) - 3);
-      // Show the tail once the line outgrows the row, like a real input.
-      const shown = width(this.replyText) > room
-        ? `…${[...this.replyText].slice(-(room - 1)).join('')}`
-        : this.replyText;
-      const cursor = this.replySending ? '' : `${fg(P.lime)}▌${RESET}`;
-      lines.push(` ${fg(P.lime)}${label}${RESET}${fg(P.white)}${shown}${RESET}${cursor}`);
-      lines.push(this.replySending
-        ? ` ${fg(P.cyan)}sending…${RESET}`
-        : ` ${fg(P.white)}enter${RESET}${fg(P.slate)} send${RESET}${fg(P.dark)}  ${RESET}`
-          + `${fg(P.white)}esc${RESET}${fg(P.slate)} cancel${RESET}${fg(P.dark)}  ${RESET}`
-          + `${fg(P.white)}ctrl+u${RESET}${fg(P.slate)} clear${RESET}`);
-    } else {
+    {
       const pos = maxScroll > 0
         ? `${fg(P.grey)}line ${this.readScroll + 1}-${Math.min(body.length, this.readScroll + bodyRows)} of ${body.length}${RESET}`
         : `${fg(P.dark)}${body.length} line${body.length === 1 ? '' : 's'}${RESET}`;
@@ -678,6 +1034,8 @@ class App {
       line1 = ` ${fg(P.red)}herdr: ${truncate(this.error, cols - 10)}${RESET}`;
     } else if (this.status && now < this.statusUntil) {
       line1 = ` ${fg(P.cyan)}${truncate(this.status, cols - 2)}${RESET}`;
+    } else if (this.unseenSummary().events.length || this.unseenSummary().truncated) {
+      line1 = ` ${fg(P.cyan)}${truncate(`s summary · ${this.unseenSummary().events.length} retained updates since last marked read`, cols - 2)}${RESET}`;
     } else if (this.mode === 'world') {
       const t = this.world.towns[this.townIndex];
       if (!t) line1 = ` ${fg(P.grey)}no towns yet${RESET}`;
@@ -721,13 +1079,14 @@ class App {
     }
 
     const keys = this.mode === 'world'
-      ? [['←→', 'town'], ['enter', 'visit'], ['w', 'town view'], ['q', 'quit']]
-      : [['←→/hover', 'agent'], ['↑↓', 'town'], ['enter/click', 'read'], ['w', 'world'], ['q', 'quit']];
+      ? [['s', 'summary'], ['a', 'attention'], ['b', 'buildings'], ['/', 'search'], ['←→', 'town'], ['enter', 'visit'], ['w', 'town'], ['q', 'quit']]
+      : [['s', 'summary'], ['a', 'attention'], ['b', 'buildings'], ['/', 'search'], ['←→', 'agent'], ['↑↓', 'town'], ['enter', 'read'], ['w', 'world'], ['q', 'quit']];
     const line2 = ' ' + keys
       .map(([k, d]) => `${fg(P.white)}${k}${RESET}${fg(P.slate)} ${d}${RESET}`)
       .join(`${fg(P.dark)}  ${RESET}`);
 
-    return [line1, line2];
+    const plainKeys = ' ' + keys.map(([k, d]) => `${k} ${d}`).join('  ');
+    return [line1, width(plainKeys) > cols ? fg(P.grey) + truncate(plainKeys, cols) + RESET : line2];
   }
 
   // --------------------------------------------------------------- input
@@ -745,7 +1104,27 @@ class App {
 
   onMouse(ev) {
     if (!this.mouseEnabled) return;
+    if (this.replyMode) {
+      if (ev.press) {
+        if (ev.name === 'wheel-up') this.scrollReply(-3);
+        else if (ev.name === 'wheel-down') this.scrollReply(3);
+      }
+      return;
+    }
+    if (this.mode === 'summary') {
+      if (ev.press && ev.name === 'wheel-up') this.summaryScroll = Math.max(0, this.summaryScroll - 3);
+      else if (ev.press && ev.name === 'wheel-down') this.summaryScroll += 3;
+      return;
+    }
 
+    if (this.mode === 'browse' || this.mode === 'inspect') {
+      const delta = ev.name === 'wheel-up' ? -1 : ev.name === 'wheel-down' ? 1 : 0;
+      if (delta && ev.press) {
+        if (this.mode === 'browse') this.moveBrowser(delta);
+        else this.inspectScroll = Math.max(0, this.inspectScroll + delta * 3);
+      }
+      return;
+    }
     if (this.mode === 'read') {
       if (ev.name === 'wheel-up' && ev.press) this.readScroll -= 3;
       else if (ev.name === 'wheel-down' && ev.press) this.readScroll += 3;
@@ -789,6 +1168,32 @@ class App {
     const up = s === '\x1b[A' || s === '\x1bOA' || s === 'k';
     const down = s === '\x1b[B' || s === '\x1bOB' || s === 'j';
 
+    if (this.replyMode) { this.replyKey(s); return; }
+    if (this.mode === 'summary') {
+      if (s === '\x1b') this.mode = this.summaryReturnMode;
+      else if (s === 'q' || s === '\x03') this.running = false;
+      else if (up) this.summaryScroll = Math.max(0, this.summaryScroll - 1);
+      else if (down) this.summaryScroll++;
+      else if (s === '\x1b[5~') this.summaryScroll = Math.max(0, this.summaryScroll - 10);
+      else if (s === '\x1b[6~' || s === ' ') this.summaryScroll += 10;
+      else if (s === 'r') this.openSummary();
+      else if (s === 'c') this.acknowledgeSummary();
+      return;
+    }
+    if (this.mode === 'browse') {
+      this.browserKey(s);
+      return;
+    }
+    if (this.mode === 'inspect') {
+      if (s === '\x1b') this.mode = 'browse';
+      else if (s === 'q' || s === '\x03') this.running = false;
+      else if (up) this.inspectScroll = Math.max(0, this.inspectScroll - 1);
+      else if (down) this.inspectScroll++;
+      else if (s === '\x1b[5~') this.inspectScroll = Math.max(0, this.inspectScroll - 10);
+      else if (s === '\x1b[6~' || s === ' ') this.inspectScroll += 10;
+      return;
+    }
+
     // While composing a relay, every printable key belongs to its composer.
     if (this.relayCompose) {
       if (s === '\x1b' || s === '\x03') { this.relayCompose = false; this.relayText = ''; return; }
@@ -802,36 +1207,10 @@ class App {
       return;
     }
 
-    // While composing, every key belongs to the composer. Nothing here may
-    // fall through to a town binding, or typing "q" would quit mid-sentence.
-    if (this.replyMode) {
-      if (s === '\x1b' || s === '\x03') {
-        this.replyMode = false;
-        this.replyText = '';
-        return;
-      }
-      if (s === '\r' || s === '\n') { this.sendReply(); return; }
-      if (s === '\x7f' || s === '\b') {
-        this.replyText = [...this.replyText].slice(0, -1).join('');
-        return;
-      }
-      if (s === '\x15') { this.replyText = ''; return; } // ctrl+u
-      // Printable text only. Drops stray escape sequences (arrows, mouse
-      // leftovers) instead of pasting their bytes into the prompt.
-      if (!s.startsWith('\x1b')) {
-        const printable = [...s].filter((ch) => {
-          const cp = ch.codePointAt(0);
-          return cp >= 0x20 && cp !== 0x7f;
-        }).join('');
-        if (printable) this.replyText += printable;
-      }
-      return;
-    }
-
     // Reading view has its own bindings; escape backs out to the town rather
     // than quitting, so drilling in is never a one-way door.
     if (this.mode === 'read') {
-      if (s === '\x1b') { this.mode = 'town'; return; }
+      if (s === '\x1b') { this.mode = this.readReturnMode; return; }
       if (s === 'q' || s === '\x03') { this.running = false; return; }
       if (up) this.readScroll -= 1;
       else if (down) this.readScroll += 1;
@@ -839,11 +1218,11 @@ class App {
       else if (s === '\x1b[6~' || s === ' ') this.readScroll += 10;
       else if (this.choices && /^[1-9]$/.test(s)) {
         this.answerChoice(Number(s) - 1);
-      } else if (s === 'r') { this.replyMode = true; this.replyText = ''; }
+      } else if (s === 'r') this.openReply();
       else if (s === 't') this.openRelay();
-      else if (left) this.mode = 'town';
+      else if (left) this.mode = this.readReturnMode;
       else if (s === '\r' || s === '\n') {
-        const e = this.selectionList().find((x) => x.paneId === this.readPaneId);
+        const e = this.allWorkers().find((x) => x.paneId === this.readPaneId);
         if (e) this.pendingFocus = e.worker;
       }
       return;
@@ -867,6 +1246,11 @@ class App {
 
     if (s === 'q' || s === '\x03' || s === '\x1b') {
       this.running = false;
+      return;
+    }
+    if (s === 's') { this.openSummary(); return; }
+    if (s === 'a' || s === 'b' || s === '/') {
+      this.openBrowser(s === 'a' ? 'attention' : s === 'b' ? 'buildings' : 'search');
       return;
     }
     if (s === 'w' || s === '\t') {
@@ -918,8 +1302,9 @@ async function main() {
   // Keep progress accruing even if Herdr started before this plugin existed.
   if (!ONCE) ensureRecorder();
 
-  const app = new App();
+  const app = new App({ summaryCursor: new SummaryCursor() });
   await app.poll();
+  if (!ONCE) app.offerSummary();
 
   const cols = () => Math.max(MIN_COLS, out.columns || 100);
   const rows = () => Math.max(MIN_ROWS, out.rows || 30);
@@ -954,13 +1339,13 @@ async function main() {
   }
 
   out.write('\x1b[?1049h\x1b[?25l\x1b[2J');
-  out.write(mouse.ENABLE);
+  out.write(mouse.ENABLE + INPUT_ENABLE);
 
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
-    out.write(mouse.DISABLE);
+    out.write(mouse.DISABLE + INPUT_DISABLE);
     out.write('\x1b[0m\x1b[?25h\x1b[?1049l');
     if (process.stdin.isTTY) {
       try { process.stdin.setRawMode(false); } catch { /* already gone */ }
@@ -971,18 +1356,18 @@ async function main() {
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
     process.stdin.resume();
-    // Decode after splitting off mouse reports, so a multi-byte character
-    // arriving in two chunks (common when typing Turkish) is reassembled
-    // rather than pasted into the reply as mojibake.
-    const decoder = new StringDecoder('utf8');
-    process.stdin.on('data', (d) => {
-      // Mouse reports arrive on stdin alongside keys; split them out first.
-      const { events, rest } = mouse.parse(d);
-      for (const ev of events) app.onMouse(ev);
-      if (rest.length) {
-        const text = decoder.write(rest);
-        if (text) app.onKey(text);
-      }
+    const input = new TerminalInput((event) => {
+      if (event.type === 'paste') app.onPaste(event.text, event.truncated);
+      else if (event.type === 'mouse') app.onMouse(event.event);
+      else if (event.type === 'focus') app.onFocus(event.focused);
+      else app.onKey(event.text);
+    });
+    let escapeTimer;
+    process.stdin.on('data', (data) => {
+      clearTimeout(escapeTimer);
+      input.feed(data);
+      escapeTimer = setTimeout(() => input.flushEscape(), 40);
+      escapeTimer.unref();
     });
   }
 
@@ -1036,8 +1421,10 @@ async function main() {
   process.on('exit', cleanup);
 }
 
-main().catch((e) => {
-  process.stdout.write('\x1b[0m\x1b[?25h\x1b[?1049l');
+module.exports = { App, width, replyLayout };
+
+if (require.main === module) main().catch((e) => {
+  process.stdout.write(INPUT_DISABLE + '\x1b[0m\x1b[?25h\x1b[?1049l');
   process.stderr.write(`herdr-town: ${e && e.stack ? e.stack : e}\n`);
   process.exit(1);
 });
